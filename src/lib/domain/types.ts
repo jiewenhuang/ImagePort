@@ -40,6 +40,7 @@ export interface ImageEditRequestInput extends ImageGenerationRequestInput {
 }
 
 export interface NativeJsonRequest {
+	requestId?: string;
 	url: string;
 	method: 'GET' | 'POST';
 	headers: Record<string, string>;
@@ -65,6 +66,7 @@ export interface NativeMultipartFile {
 }
 
 export interface NativeMultipartRequest {
+	requestId?: string;
 	url: string;
 	method: 'POST';
 	headers: Record<string, string>;

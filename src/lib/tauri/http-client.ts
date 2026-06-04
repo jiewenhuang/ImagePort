@@ -47,7 +47,11 @@ export async function nativeJsonStreamRequest(
 }
 
 export function cancelNativeJsonStreamRequest(requestId: string): Promise<boolean> {
-	return invoke<boolean>('cancel_native_json_stream_request', { requestId });
+	return cancelNativeRequest(requestId);
+}
+
+export function cancelNativeRequest(requestId: string): Promise<boolean> {
+	return invoke<boolean>('cancel_native_request', { requestId });
 }
 
 export function downloadImageAsDataUrl(url: string, fallbackMime: string): Promise<string> {

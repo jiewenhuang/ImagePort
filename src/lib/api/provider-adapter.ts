@@ -222,7 +222,12 @@ export function parseImageStreamEvents(events: Array<Record<string, unknown>>, o
 	for (const event of events) {
 		const type = getStringValue(event, 'type');
 		const object = getStringValue(event, 'object');
-		if (type === 'image_generation.partial_image' || type === 'image_edit.partial_image') {
+		if (
+			type === 'image_generation.partial_image' ||
+			type === 'image_edit.partial_image' ||
+			object === 'image.generation.partial_image' ||
+			object === 'image.edit.partial_image'
+		) {
 			const b64 = getStringValue(event, 'b64_json');
 			if (b64) partialImages.push(normalizeBase64Image(b64, mime));
 			continue;

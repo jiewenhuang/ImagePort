@@ -19,7 +19,12 @@ pub async fn native_json_stream_request(
 
 #[tauri::command]
 pub async fn cancel_native_json_stream_request(request_id: String) -> Result<bool, String> {
-    Ok(http_client::cancel_json_stream_request(request_id))
+    Ok(http_client::cancel_request(request_id))
+}
+
+#[tauri::command]
+pub async fn cancel_native_request(request_id: String) -> Result<bool, String> {
+    Ok(http_client::cancel_request(request_id))
 }
 
 #[tauri::command]

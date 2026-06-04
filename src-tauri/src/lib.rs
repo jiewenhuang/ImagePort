@@ -13,6 +13,7 @@ pub fn run() {
             commands::http::native_json_request,
             commands::http::native_json_stream_request,
             commands::http::cancel_native_json_stream_request,
+            commands::http::cancel_native_request,
             commands::http::native_multipart_request,
             commands::http::native_multipart_stream_request,
             commands::http::download_image_as_data_url

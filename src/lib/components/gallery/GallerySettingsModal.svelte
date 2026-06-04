@@ -907,7 +907,7 @@
 					{:else if activeTab === 'about'}
 						<div class="grid gap-4">
 							<section class="rounded-lg border bg-muted/20 p-4">
-								<h4 class="text-sm font-semibold">ImagePort Desktop</h4>
+								<h4 class="text-sm font-semibold">ImagePort</h4>
 								<p class="text-muted-foreground mt-2 text-sm leading-relaxed">
 									桌面端通过 Tauri 后端代理图像请求，避开浏览器跨域限制，同时把历史任务保存到 SQLite 和本地图片文件中。
 								</p>

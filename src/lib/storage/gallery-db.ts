@@ -139,11 +139,16 @@ export async function saveStoredTask(task: TaskRecord): Promise<boolean> {
 async function saveStoredTasksNow(normalizedTasks: TaskRecord[]): Promise<boolean> {
 	const db = await getGalleryDb();
 	if (!db) return false;
-	for (const task of normalizedTasks) {
-		const payload = await createFileBackedTaskPayload(task, tauriImageFileStore);
-		await upsertTaskRow(db, task, payload);
-	}
-	await deleteTasksOutsideSnapshot(db, normalizedTasks.map((task) => task.id));
+	const rows = await Promise.all(
+		normalizedTasks.map(async (task) => ({
+			task,
+			payload: await createFileBackedTaskPayload(task, tauriImageFileStore)
+		}))
+	);
+	await runSqlBatchWithTransaction(db, [
+		...rows.map(({ task, payload }) => (executor: GalleryDbExecutor) => upsertTaskRow(executor, task, payload)),
+		(executor) => deleteTasksOutsideSnapshot(executor, normalizedTasks.map((task) => task.id))
+	]);
 	return true;
 }
 
@@ -180,19 +185,21 @@ export async function saveStoredAgentConversations(conversations: AgentConversat
 async function saveStoredAgentConversationsNow(conversations: AgentConversation[]): Promise<boolean> {
 	const db = await getGalleryDb();
 	if (!db) return false;
-	for (const conversation of conversations) {
-		await db.execute(
-			`INSERT INTO agent_conversations (id, title, created_at, updated_at, payload)
-			 VALUES ($1, $2, $3, $4, $5)
-			 ON CONFLICT(id) DO UPDATE SET
-				title = excluded.title,
-				created_at = excluded.created_at,
-				updated_at = excluded.updated_at,
-				payload = excluded.payload`,
-			createAgentConversationRow(conversation)
-		);
-	}
-	await deleteAgentConversationsOutsideSnapshot(db, conversations.map((conversation) => conversation.id));
+	await runSqlBatchWithTransaction(db, [
+		...conversations.map((conversation) => (executor: GalleryDbExecutor) =>
+			executor.execute(
+				`INSERT INTO agent_conversations (id, title, created_at, updated_at, payload)
+				 VALUES ($1, $2, $3, $4, $5)
+				 ON CONFLICT(id) DO UPDATE SET
+					title = excluded.title,
+					created_at = excluded.created_at,
+					updated_at = excluded.updated_at,
+					payload = excluded.payload`,
+				createAgentConversationRow(conversation)
+			)
+		),
+		(executor) => deleteAgentConversationsOutsideSnapshot(executor, conversations.map((conversation) => conversation.id))
+	]);
 	return true;
 }
 
@@ -219,6 +226,47 @@ export async function upsertTaskRow(db: GalleryDbExecutor, task: TaskRecord, pay
 			updated_at = excluded.updated_at`,
 		serializeTaskRow(task, payload)
 	);
+}
+
+export async function runSqlBatchWithTransaction(
+	db: GalleryDbExecutor,
+	operations: Array<(executor: GalleryDbExecutor) => Promise<unknown>>
+): Promise<void> {
+	try {
+		await db.execute('BEGIN IMMEDIATE');
+	} catch {
+		await runSqlOperations(db, operations);
+		return;
+	}
+
+	try {
+		await runSqlOperations(db, operations);
+	} catch (err) {
+		await rollbackSqlTransaction(db);
+		throw err;
+	}
+
+	try {
+		await db.execute('COMMIT');
+	} catch {
+		await rollbackSqlTransaction(db);
+		await runSqlOperations(db, operations);
+	}
+}
+
+async function runSqlOperations(
+	db: GalleryDbExecutor,
+	operations: Array<(executor: GalleryDbExecutor) => Promise<unknown>>
+): Promise<void> {
+	for (const operation of operations) await operation(db);
+}
+
+async function rollbackSqlTransaction(db: GalleryDbExecutor): Promise<void> {
+	try {
+		await db.execute('ROLLBACK');
+	} catch {
+		// The sqlite plugin can report "no transaction is active" after a failed COMMIT; the fallback path is safer than surfacing rollback noise.
+	}
 }
 
 export async function deleteTaskImageFiles(task: TaskRecord): Promise<void> {
@@ -277,7 +325,7 @@ export function parseTaskPayload(payload: string): unknown {
 	}
 }
 
-async function deleteTasksOutsideSnapshot(db: Database, keptIds: string[]): Promise<void> {
+async function deleteTasksOutsideSnapshot(db: GalleryDbExecutor, keptIds: string[]): Promise<void> {
 	if (keptIds.length === 0) {
 		await db.execute('DELETE FROM gallery_tasks');
 		return;
@@ -286,7 +334,7 @@ async function deleteTasksOutsideSnapshot(db: Database, keptIds: string[]): Prom
 	await db.execute(`DELETE FROM gallery_tasks WHERE id NOT IN (${placeholders})`, keptIds);
 }
 
-async function deleteAgentConversationsOutsideSnapshot(db: Database, keptIds: string[]): Promise<void> {
+async function deleteAgentConversationsOutsideSnapshot(db: GalleryDbExecutor, keptIds: string[]): Promise<void> {
 	if (keptIds.length === 0) {
 		await db.execute('DELETE FROM agent_conversations');
 		return;

@@ -131,6 +131,29 @@ describe('sql batch transaction helper', () => {
 		expect(calls).toEqual(['BEGIN IMMEDIATE', 'UPSERT ONE', 'DELETE STALE']);
 	});
 
+	test('falls back to sequential operations when commit reports no active transaction', async () => {
+		const calls: string[] = [];
+
+		await runSqlBatchWithTransaction(
+			{
+				async execute(sql) {
+					calls.push(sql);
+					if (sql === 'COMMIT') throw new Error('cannot commit - no transaction is active');
+				}
+			},
+			[
+				async (db) => {
+					await db.execute('UPSERT ONE');
+				},
+				async (db) => {
+					await db.execute('DELETE STALE');
+				}
+			]
+		);
+
+		expect(calls).toEqual(['BEGIN IMMEDIATE', 'UPSERT ONE', 'DELETE STALE', 'COMMIT', 'ROLLBACK', 'UPSERT ONE', 'DELETE STALE']);
+	});
+
 	test('rolls back and keeps operation errors visible', async () => {
 		const calls: string[] = [];
 		let message = '';

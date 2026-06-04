@@ -28,24 +28,12 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { toast } from 'svelte-sonner';
 	import {
-		buildAgentResponsesRequest,
 		createAgentAssistantFallbackText,
-		enforceAgentToolBudget,
 		getAgentRequestBlockReason,
-		parseAgentResponsesPayload,
-		parseAgentResponsesStreamEvents,
 		type AgentResponsesResult
 	} from '$lib/api/agent-runtime';
-	import {
-		buildCustomPollRequest,
-		buildImageProviderRequestGroup,
-		getCustomPollState,
-		parseImageStreamEvents,
-		readCustomTaskId,
-		type ProviderNativeRequest
-	} from '$lib/api/provider-adapter';
-	import { createJsonServerSentEventCollector } from '$lib/api/server-sent-events';
-	import { summarizeImageRequestGroup } from '$lib/api/image-request-group';
+	import { runAgentResponsesRequest } from '$lib/api/agent-runner';
+	import { runGalleryImageRequestGroup } from '$lib/api/gallery-runner';
 	import {
 		completeAgentRound,
 		createAgentConversation,
@@ -109,7 +97,7 @@
 		type TaskImportSummary
 	} from '$lib/domain/task-storage';
 	import {
-		cancelNativeJsonStreamRequest,
+		cancelNativeRequest,
 		downloadImageAsDataUrl,
 		nativeJsonRequest,
 		nativeJsonStreamRequest,
@@ -139,6 +127,7 @@
 	import GallerySettingsModal from './GallerySettingsModal.svelte';
 	import GalleryLightbox from './GalleryLightbox.svelte';
 	import ImageActionContextMenu from './ImageActionContextMenu.svelte';
+	import ImagePortLogo from '$lib/components/brand/ImagePortLogo.svelte';
 	import MaskEditorModal from './MaskEditorModal.svelte';
 	import ReferenceImageStrip from './ReferenceImageStrip.svelte';
 	import SizePickerModal from './SizePickerModal.svelte';
@@ -166,7 +155,7 @@
 	let agentConversations = $state<AgentConversation[]>([]);
 	let activeAgentConversationId = $state<string | null>(null);
 	let canceledAgentRoundIds = $state<string[]>([]);
-	let activeAgentStreamRequestIds = $state<Record<string, string>>({});
+	let activeAgentRequestIds = $state<Record<string, string>>({});
 	let nextGalleryProfileOverrideId = $state<string | null>(null);
 	let hasHydratedAgentConversations = $state(false);
 	let now = $state(Date.now());
@@ -585,7 +574,22 @@
 		taskMask: MaskDraft | null
 	) {
 		try {
-			const result = await runImagesRequestGroup(taskId, requestInput, taskInputImages, taskMask);
+			const result = await runGalleryImageRequestGroup({
+				taskId,
+				settings: requestInput.settings,
+				profile: requestInput.profile,
+				prompt: requestInput.prompt,
+				params: requestInput.params,
+				inputImages: taskInputImages,
+				mask: taskMask,
+				nativeJsonRequest,
+				nativeMultipartRequest,
+				nativeJsonStreamRequest,
+				nativeMultipartStreamRequest,
+				downloadImageAsDataUrl,
+				createRequestId: () => `${taskId}-${crypto.randomUUID()}`,
+				onPartialImages: updateTaskPartialImages
+			});
 			const nextTasks: TaskRecord[] = tasks.map((task) =>
 				task.id === taskId
 					? {
@@ -648,7 +652,26 @@
 		mask: MaskDraft | null;
 	}) {
 		try {
-			const result = await requestAgentResponses(input);
+			const runningConversation = getAgentConversation(input.conversationId);
+			if (!runningConversation) throw new Error('Agent 会话不存在');
+			const result = await runAgentResponsesRequest({
+				conversation: runningConversation,
+				roundId: input.roundId,
+				taskId: input.taskId,
+				profile: input.profile,
+				settings: input.settings,
+				prompt: input.prompt,
+				params: input.params,
+				inputImages: input.inputImages,
+				mask: input.mask,
+				nativeJsonRequest,
+				nativeJsonStreamRequest,
+				createRequestId: () => `agent-${input.roundId}-${crypto.randomUUID()}`,
+				onActiveRequestId: (requestId) => setActiveAgentRequestId(input.roundId, requestId),
+				onText: updateAgentRoundText,
+				onPartialImages: updateTaskPartialImages,
+				isCanceled: () => isAgentRoundCanceled(input.roundId)
+			});
 			if (isAgentRoundCanceled(input.roundId)) return;
 			const content = createAgentAssistantFallbackText(result, input.params.n);
 			const nextTasks: TaskRecord[] = tasks.map((task) =>
@@ -667,15 +690,15 @@
 							streamPartialImageIds: result.partialImages
 						}
 					: task
-				);
-				tasks = nextTasks;
-				const updatedTask = nextTasks.find((task) => task.id === input.taskId);
-				if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
-				const conversation = getAgentConversation(input.conversationId);
-				if (conversation) {
+			);
+			tasks = nextTasks;
+			const updatedTask = nextTasks.find((task) => task.id === input.taskId);
+			if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
+			const completedConversation = getAgentConversation(input.conversationId);
+			if (completedConversation) {
 				agentConversations = upsertAgentConversation(
 					agentConversations,
-					completeAgentRound(conversation, input.roundId, {
+					completeAgentRound(completedConversation, input.roundId, {
 						content,
 						outputTaskIds: [input.taskId],
 						error: result.images.length || result.partialImages.length ? null : 'Agent 没有返回图片',
@@ -731,173 +754,6 @@
 		}
 	}
 
-	async function requestAgentResponses(input: {
-		conversationId: string;
-		roundId: string;
-		taskId: string;
-		profile: ApiProfile;
-		settings: AppSettings;
-		prompt: string;
-		params: TaskParams;
-		inputImages: InputImage[];
-		mask: MaskDraft | null;
-	}): Promise<AgentResponsesResult> {
-		const conversation = getAgentConversation(input.conversationId);
-		if (!conversation) throw new Error('Agent 会话不存在');
-		const shouldStream = input.profile.streamImages;
-		const request = buildAgentResponsesRequest({
-			profile: input.profile,
-			settings: input.settings,
-			conversation,
-			roundId: input.roundId,
-			prompt: input.prompt,
-			params: input.params,
-			inputImages: input.inputImages,
-			mask: input.mask,
-			stream: shouldStream,
-			partialImages: shouldStream ? input.profile.streamPartialImages : 0
-		});
-		if (!shouldStream) {
-			const response = await nativeJsonRequest(request);
-			if (response.status < 200 || response.status >= 300) {
-				throw new Error(getErrorMessage(response.body, response.status));
-			}
-			return enforceAgentToolBudget(parseAgentResponsesPayload(response.body, input.params.output_format), input.settings.agentMaxToolRounds);
-		}
-
-		const events: Array<Record<string, unknown>> = [];
-		const requestId = `agent-${input.roundId}-${crypto.randomUUID()}`;
-		activeAgentStreamRequestIds = { ...activeAgentStreamRequestIds, [input.roundId]: requestId };
-		const collector = createJsonServerSentEventCollector((event) => {
-			events.push(event);
-			const parsed = parseAgentResponsesStreamEvents(events, input.params.output_format);
-			if (parsed.text) updateAgentRoundText(input.conversationId, input.roundId, parsed.text);
-			if (parsed.partialImages.length) updateTaskPartialImages(input.taskId, parsed.partialImages);
-		});
-		try {
-			const response = await nativeJsonStreamRequest(
-				{
-					...request,
-					requestId
-				},
-				(chunk) => collector.push(chunk)
-			);
-			collector.finish();
-			if (isAgentRoundCanceled(input.roundId)) {
-				throw new Error('用户停止了 Agent 轮次');
-			}
-			if (response.status < 200 || response.status >= 300) {
-				throw new Error(getErrorMessage(response.body, response.status));
-			}
-		} finally {
-			const { [input.roundId]: _removed, ...rest } = activeAgentStreamRequestIds;
-			activeAgentStreamRequestIds = rest;
-		}
-		return enforceAgentToolBudget(parseAgentResponsesStreamEvents(events, input.params.output_format), input.settings.agentMaxToolRounds);
-	}
-
-	async function runImagesRequestGroup(
-		taskId: string,
-		requestInput: {
-			settings: AppSettings;
-			profile: ApiProfile;
-			baseUrl: string;
-			apiKey: string;
-			model: string;
-			timeoutSecs: number;
-			responseFormatB64Json: boolean;
-			prompt: string;
-			params: TaskParams;
-		},
-		taskInputImages: InputImage[],
-		taskMask: MaskDraft | null
-	) {
-		const outputFormat = requestInput.params.output_format;
-		const group = buildImageProviderRequestGroup({
-			settings: requestInput.settings,
-			profile: requestInput.profile,
-			prompt: requestInput.prompt,
-			params: requestInput.params,
-			inputImages: taskInputImages,
-			mask: taskMask
-		});
-		const requestPromises = group.requests.map((request) =>
-			requestProviderNativeResponse(request, outputFormat, requestInput.profile, taskId)
-		);
-
-		return summarizeImageRequestGroup(await Promise.allSettled(requestPromises));
-	}
-
-	async function requestProviderNativeResponse(
-		providerRequest: ProviderNativeRequest,
-		outputFormat: TaskParams['output_format'],
-		profile: ApiProfile,
-		taskId: string
-	) {
-		if (profile.provider === 'openai' && profile.streamImages) {
-			return requestStreamImageResponse(providerRequest, outputFormat, taskId);
-		}
-		const response = await sendProviderNativeRequest(providerRequest);
-		if (response.status < 200 || response.status >= 300) {
-			throw new Error(getErrorMessage(response.body, response.status));
-		}
-
-		const payload = await resolveCustomQueuePayload(response.body, profile, providerRequest);
-		const result = providerRequest.parse(payload);
-		const downloadedImages = result.rawImageUrls?.length
-			? await Promise.all(
-					result.rawImageUrls.map((url) =>
-						downloadImageAsDataUrl(url, `image/${outputFormat === 'jpeg' ? 'jpeg' : outputFormat}`)
-					)
-				)
-			: [];
-		return {
-			...result,
-			images: [...result.images, ...downloadedImages]
-		};
-	}
-
-	async function requestStreamImageResponse(
-		providerRequest: ProviderNativeRequest,
-		outputFormat: TaskParams['output_format'],
-		taskId: string
-	) {
-		const events: Array<Record<string, unknown>> = [];
-		const requestId = `${taskId}-${crypto.randomUUID()}`;
-		const collector = createJsonServerSentEventCollector((event) => {
-			events.push(event);
-			const parsed = parseImageStreamEvents(events, outputFormat);
-			if (parsed.partialImages.length) {
-				updateTaskPartialImages(taskId, parsed.partialImages);
-			}
-		});
-		const response =
-			providerRequest.kind === 'multipart'
-				? await nativeMultipartStreamRequest(
-						{
-							...providerRequest.request,
-							requestId
-						},
-						(chunk) => collector.push(chunk)
-					)
-				: await nativeJsonStreamRequest(
-						{
-							...providerRequest.request,
-							requestId
-						},
-						(chunk) => collector.push(chunk)
-					);
-		collector.finish();
-		if (response.status < 200 || response.status >= 300) {
-			throw new Error(getErrorMessage(response.body, response.status));
-		}
-		const parsed = parseImageStreamEvents(events, outputFormat);
-		return {
-			...parsed.result,
-			streamPartialImages: parsed.partialImages
-		};
-	}
-
 	function updateTaskPartialImages(taskId: string, partialImages: string[]) {
 		const nextTasks: TaskRecord[] = tasks.map((task) =>
 			task.id === taskId
@@ -909,34 +765,6 @@
 		);
 		tasks = nextTasks;
 		taskPersistence.persistTaskSnapshotSoon(taskId);
-	}
-
-	function sendProviderNativeRequest(providerRequest: ProviderNativeRequest) {
-		if (providerRequest.kind === 'multipart') return nativeMultipartRequest(providerRequest.request);
-		return nativeJsonRequest(providerRequest.request);
-	}
-
-	async function resolveCustomQueuePayload(payload: unknown, profile: ApiProfile, providerRequest: ProviderNativeRequest) {
-		if (!providerRequest.customAsync) return payload;
-		const taskId = readCustomTaskId(payload, providerRequest.customAsync.submit);
-		if (!taskId) return payload;
-		const deadline = Date.now() + Math.max(1, profile.timeoutSecs) * 1000;
-		const poll = providerRequest.customAsync.poll;
-		while (Date.now() < deadline) {
-			await sleep(Math.max(1, poll.intervalSeconds ?? 5) * 1000);
-			const pollResponse = await nativeJsonRequest(buildCustomPollRequest(profile, poll, taskId));
-			if (pollResponse.status < 200 || pollResponse.status >= 300) {
-				throw new Error(getErrorMessage(pollResponse.body, pollResponse.status));
-			}
-			const state = getCustomPollState(pollResponse.body, poll);
-			if (state === 'failure') throw new Error(getErrorMessage(pollResponse.body, pollResponse.status));
-			if (state === 'success') return pollResponse.body;
-		}
-		throw new Error('自定义服务商异步任务等待超时');
-	}
-
-	function sleep(ms: number) {
-		return new Promise((resolve) => window.setTimeout(resolve, ms));
 	}
 
 	function buildActualParamsByImage(images: string[], actualParamsList: Array<Partial<TaskParams> | undefined>) {
@@ -953,20 +781,6 @@
 				.map((_, index) => [String(index), revisedPrompts[index]] as const)
 				.filter((entry): entry is readonly [string, string] => typeof entry[1] === 'string' && entry[1].trim().length > 0)
 		);
-	}
-
-	function getErrorMessage(body: unknown, status: number) {
-		if (body && typeof body === 'object') {
-			const record = body as Record<string, unknown>;
-			const errorValue = record.error;
-			if (errorValue && typeof errorValue === 'object') {
-				const message = (errorValue as Record<string, unknown>).message;
-				if (typeof message === 'string' && message.trim()) return message;
-			}
-			if (typeof record.message === 'string' && record.message.trim()) return record.message;
-		}
-		if (typeof body === 'string' && body.trim()) return body;
-		return `HTTP ${status}`;
 	}
 
 	function retryTask(task: TaskRecord) {
@@ -1018,11 +832,20 @@
 		);
 	}
 
+	function setActiveAgentRequestId(roundId: string, requestId: string | null) {
+		if (requestId) {
+			activeAgentRequestIds = { ...activeAgentRequestIds, [roundId]: requestId };
+			return;
+		}
+		const { [roundId]: _removed, ...rest } = activeAgentRequestIds;
+		activeAgentRequestIds = rest;
+	}
+
 	function stopAgentRound(roundId: string) {
 		if (!activeAgentConversation) return;
-		const requestId = activeAgentStreamRequestIds[roundId];
+		const requestId = activeAgentRequestIds[roundId];
 		if (requestId) {
-			void cancelNativeJsonStreamRequest(requestId).catch(() => undefined);
+			void cancelNativeRequest(requestId).catch(() => undefined);
 		}
 		canceledAgentRoundIds = [...new Set([...canceledAgentRoundIds, roundId])];
 		agentConversations = upsertAgentConversation(
@@ -1067,7 +890,7 @@
 		const round = activeAgentConversation?.rounds.find((item) => item.id === roundId);
 		const sourceTask = tasks.find((task) => task.agentRoundId === roundId);
 		if (!round) return;
-		agentPrompt = `继续上一轮结果，补充细节或再生成一组变体。`;
+		agentPrompt = `继续上一轮结果，补充细节或再生成一组新的图片。`;
 		void startAgentRound({
 			prompt: agentPrompt,
 			inputImages: [],
@@ -1741,7 +1564,7 @@
 	<header data-no-drag-select class="border-border/80 bg-background/95 z-40 shrink-0 border-b backdrop-blur">
 		<div class="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
 			<div class="flex min-w-0 items-center gap-3">
-				<div class="bg-primary size-8 rounded-lg shadow-xs"></div>
+				<ImagePortLogo class="size-8 rounded-lg shadow-xs" />
 				<div class="min-w-0">
 					<h1 class="truncate text-lg font-bold tracking-normal">ImagePort</h1>
 					<p class="text-muted-foreground text-xs">Gallery</p>

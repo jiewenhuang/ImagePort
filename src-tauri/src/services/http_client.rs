@@ -11,11 +11,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 
-static CANCELLED_STREAM_REQUESTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static CANCELLED_REQUESTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeJsonRequest {
+    pub request_id: Option<String>,
     pub url: String,
     pub method: String,
     #[serde(default)]
@@ -44,6 +45,7 @@ pub struct NativeMultipartFile {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeMultipartRequest {
+    pub request_id: Option<String>,
     pub url: String,
     pub method: String,
     #[serde(default)]
@@ -97,6 +99,10 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub async fn send_json_request(request: NativeJsonRequest) -> Result<NativeJsonResponse, String> {
+    let request_id = request.request_id.clone();
+    if let Some(request_id) = request_id.as_deref() {
+        clear_request_cancellation(request_id);
+    }
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(request.timeout_secs.max(1)))
         .build()
@@ -114,32 +120,17 @@ pub async fn send_json_request(request: NativeJsonRequest) -> Result<NativeJsonR
         builder = builder.json(&body);
     }
 
-    let response = builder
-        .send()
-        .await
-        .map_err(|err| format!("请求失败：{err}"))?;
-    let status = response.status().as_u16();
-    let headers = from_header_map(response.headers());
-    let text = response
-        .text()
-        .await
-        .map_err(|err| format!("读取响应失败：{err}"))?;
-    let body = if text.trim().is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_str(&text).unwrap_or(Value::String(text))
-    };
-
-    Ok(NativeJsonResponse {
-        status,
-        headers,
-        body,
-    })
+    let response = send_request_with_cancellation(builder, request_id.as_deref()).await?;
+    read_json_response_with_cancellation(response, request_id.as_deref()).await
 }
 
 pub async fn send_multipart_request(
     request: NativeMultipartRequest,
 ) -> Result<NativeJsonResponse, String> {
+    let request_id = request.request_id.clone();
+    if let Some(request_id) = request_id.as_deref() {
+        clear_request_cancellation(request_id);
+    }
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(request.timeout_secs.max(1)))
         .build()
@@ -152,31 +143,13 @@ pub async fn send_multipart_request(
 
     let form = build_multipart_form(request.fields, request.files)?;
 
-    let response = client
+    let builder = client
         .request(method, request.url)
         .headers(to_header_map(&request.headers)?)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|err| format!("请求失败：{err}"))?;
+        .multipart(form);
 
-    let status = response.status().as_u16();
-    let headers = from_header_map(response.headers());
-    let text = response
-        .text()
-        .await
-        .map_err(|err| format!("读取响应失败：{err}"))?;
-    let body = if text.trim().is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_str(&text).unwrap_or(Value::String(text))
-    };
-
-    Ok(NativeJsonResponse {
-        status,
-        headers,
-        body,
-    })
+    let response = send_request_with_cancellation(builder, request_id.as_deref()).await?;
+    read_json_response_with_cancellation(response, request_id.as_deref()).await
 }
 
 pub async fn download_image_as_data_url(
@@ -223,7 +196,7 @@ pub async fn send_json_stream_request(
     app: AppHandle,
     request: NativeStreamRequest,
 ) -> Result<NativeJsonResponse, String> {
-    clear_stream_cancellation(&request.request_id);
+    clear_request_cancellation(&request.request_id);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(request.timeout_secs.max(1)))
         .build()
@@ -241,10 +214,7 @@ pub async fn send_json_stream_request(
         builder = builder.json(&body);
     }
 
-    let response = builder
-        .send()
-        .await
-        .map_err(|err| format!("请求失败：{err}"))?;
+    let response = send_request_with_cancellation(builder, Some(&request.request_id)).await?;
     read_streaming_response(app, request.request_id, response).await
 }
 
@@ -252,7 +222,7 @@ pub async fn send_multipart_stream_request(
     app: AppHandle,
     request: NativeMultipartStreamRequest,
 ) -> Result<NativeJsonResponse, String> {
-    clear_stream_cancellation(&request.request_id);
+    clear_request_cancellation(&request.request_id);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(request.timeout_secs.max(1)))
         .build()
@@ -264,40 +234,103 @@ pub async fn send_multipart_stream_request(
         .map_err(|err| format!("请求方法无效：{err}"))?;
 
     let form = build_multipart_form(request.fields, request.files)?;
-    let response = client
+    let builder = client
         .request(method, request.url)
         .headers(to_header_map(&request.headers)?)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|err| format!("请求失败：{err}"))?;
+        .multipart(form);
+    let response = send_request_with_cancellation(builder, Some(&request.request_id)).await?;
 
     read_streaming_response(app, request.request_id, response).await
 }
 
-pub fn cancel_json_stream_request(request_id: String) -> bool {
-    let mut cancelled = stream_cancel_set()
+pub fn cancel_request(request_id: String) -> bool {
+    let mut cancelled = request_cancel_set()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     cancelled.insert(request_id)
 }
 
-fn stream_cancel_set() -> &'static Mutex<HashSet<String>> {
-    CANCELLED_STREAM_REQUESTS.get_or_init(|| Mutex::new(HashSet::new()))
+fn request_cancel_set() -> &'static Mutex<HashSet<String>> {
+    CANCELLED_REQUESTS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-fn clear_stream_cancellation(request_id: &str) {
-    let mut cancelled = stream_cancel_set()
+fn clear_request_cancellation(request_id: &str) {
+    let mut cancelled = request_cancel_set()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     cancelled.remove(request_id);
 }
 
-fn take_stream_cancellation(request_id: &str) -> bool {
-    let mut cancelled = stream_cancel_set()
+fn take_request_cancellation(request_id: &str) -> bool {
+    let mut cancelled = request_cancel_set()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     cancelled.remove(request_id)
+}
+
+fn is_request_cancelled(request_id: &str) -> bool {
+    let cancelled = request_cancel_set()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cancelled.contains(request_id)
+}
+
+async fn wait_for_cancellation(request_id: String) {
+    loop {
+        if is_request_cancelled(&request_id) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn send_request_with_cancellation(
+    builder: reqwest::RequestBuilder,
+    request_id: Option<&str>,
+) -> Result<Response, String> {
+    if let Some(request_id) = request_id {
+        let cancellation = wait_for_cancellation(request_id.to_string());
+        tokio::select! {
+            response = builder.send() => response.map_err(|err| format!("请求失败：{err}")),
+            _ = cancellation => Err("请求已取消".to_string()),
+        }
+    } else {
+        builder
+            .send()
+            .await
+            .map_err(|err| format!("请求失败：{err}"))
+    }
+}
+
+async fn read_json_response_with_cancellation(
+    response: Response,
+    request_id: Option<&str>,
+) -> Result<NativeJsonResponse, String> {
+    let status = response.status().as_u16();
+    let headers = from_header_map(response.headers());
+    let text_result = if let Some(request_id) = request_id {
+        let cancellation = wait_for_cancellation(request_id.to_string());
+        tokio::select! {
+            text = response.text() => text.map_err(|err| format!("读取响应失败：{err}")),
+            _ = cancellation => Err("请求已取消".to_string()),
+        }
+    } else {
+        response
+            .text()
+            .await
+            .map_err(|err| format!("读取响应失败：{err}"))
+    };
+    if let Some(request_id) = request_id {
+        clear_request_cancellation(request_id);
+    }
+    let text = text_result?;
+    let body = parse_response_text_body(text);
+
+    Ok(NativeJsonResponse {
+        status,
+        headers,
+        body,
+    })
 }
 
 async fn read_streaming_response(
@@ -323,9 +356,9 @@ async fn read_streaming_response(
 
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        if take_stream_cancellation(&request_id) {
+        if take_request_cancellation(&request_id) {
             return Ok(NativeJsonResponse {
-                status,
+                status: 499,
                 headers,
                 body: Value::String("cancelled".to_string()),
             });

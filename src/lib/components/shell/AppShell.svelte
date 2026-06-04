@@ -1,4 +1,6 @@
 <script lang="ts">
+	import ImagePortLogo from '$lib/components/brand/ImagePortLogo.svelte';
+
 	let { children } = $props();
 </script>
 
@@ -8,13 +10,11 @@
 	>
 		<div class="mx-auto flex h-12 max-w-7xl items-center justify-between px-5">
 			<div class="flex items-center gap-3">
-				<div class="bg-primary size-7 rounded-md shadow-xs"></div>
+				<ImagePortLogo class="size-7 rounded-md shadow-xs" />
 				<div>
 					<h1 class="text-sm font-semibold tracking-normal">ImagePort</h1>
-					<p class="text-muted-foreground text-xs">Gallery desktop preview</p>
 				</div>
 			</div>
-			<div class="text-muted-foreground text-xs">Tauri HTTP bridge enabled</div>
 		</div>
 	</header>
 
