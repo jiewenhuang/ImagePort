@@ -17,6 +17,7 @@
 	import { Select } from '$lib/components/ui/select';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { toast } from 'svelte-sonner';
+	import packageInfo from '../../../../package.json';
 	import type { TaskRecord } from '$lib/domain/types';
 	import type { TaskImportSummary } from '$lib/domain/task-storage';
 	import type { CleanupImageFilesResult } from '$lib/storage/gallery-db';
@@ -91,11 +92,24 @@
 	let importInput = $state<HTMLInputElement>();
 	let taskImportInput = $state<HTMLInputElement>();
 	let fullBackupImportInput = $state<HTMLInputElement>();
+	let appVersion = $state(packageInfo.version);
 
 	let activeProfile = $derived(getActiveProfile(settings));
 
 	$effect(() => {
 		if (!tasks.length) showClearTasksDialog = false;
+	});
+
+	$effect(() => {
+		if (!open) return;
+		void import('@tauri-apps/api/app')
+			.then(({ getVersion }) => getVersion())
+			.then((version) => {
+				appVersion = version;
+			})
+			.catch(() => {
+				appVersion = packageInfo.version;
+			});
 	});
 
 	function close() {
@@ -1107,7 +1121,7 @@
 								<div class="mt-4 grid grid-cols-2 gap-3 text-xs">
 									<div class="rounded-lg border bg-background/70 p-3">
 										<div class="text-muted-foreground">版本</div>
-										<div class="mt-1 font-medium">0.1.0</div>
+										<div class="mt-1 font-medium">{appVersion}</div>
 									</div>
 									<div class="rounded-lg border bg-background/70 p-3">
 										<div class="text-muted-foreground">历史任务</div>
