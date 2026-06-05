@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -45,6 +45,9 @@ jobs:
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
+
+      - name: Sync version from release tag
+        run: bun scripts/sync-version.mjs "${{ github.event.release.tag_name }}"
 
       - name: Build and upload bundles
         uses: tauri-apps/tauri-action@v0

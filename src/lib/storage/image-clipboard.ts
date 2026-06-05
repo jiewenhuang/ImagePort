@@ -24,7 +24,14 @@ export async function copyImageToClipboard(
 	dataUrl: string,
 	options: CopyImageToClipboardOptions = {}
 ): Promise<'native' | 'browser'> {
-	const bytes = dataUrlToDownloadBytes(dataUrl);
+	const browserCopy = () => copyImageBlobToBrowserClipboard(dataUrl, options.clipboardWrite);
+	let browserError: unknown;
+	try {
+		return await browserCopy();
+	} catch (err) {
+		browserError = err;
+	}
+
 	if (options.write || canUseTauriPlugins()) {
 		const decoded = await (options.decodeImage ?? decodeDataUrlToRgbaImage)(dataUrl);
 		const image = await (options.createNativeImage ?? createNativeImage)(decoded.rgba, decoded.width, decoded.height);
@@ -32,13 +39,20 @@ export async function copyImageToClipboard(
 		return 'native';
 	}
 
+	throw browserError instanceof Error ? browserError : new Error('当前环境不支持复制图片');
+}
+
+async function copyImageBlobToBrowserClipboard(
+	dataUrl: string,
+	clipboardWrite?: (items: ClipboardItem[]) => Promise<void>
+): Promise<'browser'> {
 	const mime = getDataUrlMime(dataUrl) ?? 'image/png';
-	if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+	if (typeof ClipboardItem === 'undefined' || typeof navigator === 'undefined' || !navigator.clipboard?.write) {
 		throw new Error('当前环境不支持复制图片');
 	}
-	const blob = new Blob([bytes], { type: mime });
-	await (options.clipboardWrite ?? navigator.clipboard.write.bind(navigator.clipboard))([
-		new ClipboardItem({ [mime]: blob })
+	const bytes = dataUrlToDownloadBytes(dataUrl);
+	await (clipboardWrite ?? navigator.clipboard.write.bind(navigator.clipboard))([
+		new ClipboardItem({ [mime]: new Blob([bytes], { type: mime }) })
 	]);
 	return 'browser';
 }

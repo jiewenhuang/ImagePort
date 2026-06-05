@@ -133,10 +133,13 @@ cd src-tauri && cargo check
 发版流程：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+bun scripts/sync-version.mjs 0.2.0
+git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+git commit -m "chore: bump version to 0.2.0"
+git tag v0.2.0
+git push origin main v0.2.0
 ```
 
-然后在 GitHub Releases 页面基于该 tag 创建并发布 Release。工作流触发后会自动追加各平台产物。
+然后在 GitHub Releases 页面基于该 tag 创建并发布 Release。工作流触发后会自动追加各平台产物，并再次从 tag 同步打包版本，避免产物版本号停留在旧值。
 
 当前 workflow 未配置代码签名/公证。macOS 和 Windows 的签名证书、notarization、updater 私钥等发布凭据后续可通过 GitHub Secrets 接入。
