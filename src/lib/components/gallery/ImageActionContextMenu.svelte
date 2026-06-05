@@ -7,6 +7,8 @@
 		canDownloadAll = false,
 		canUseAsReference = false,
 		canEditMask = false,
+		showOpen = true,
+		openLabel = '查看大图',
 		onOpen,
 		onDownload,
 		onDownloadAll,
@@ -19,7 +21,9 @@
 		canDownloadAll?: boolean;
 		canUseAsReference?: boolean;
 		canEditMask?: boolean;
-		onOpen: () => void;
+		showOpen?: boolean;
+		openLabel?: string;
+		onOpen?: () => void;
 		onDownload: () => void;
 		onDownloadAll?: () => void;
 		onCopy: () => void | Promise<void>;
@@ -30,14 +34,16 @@
 </script>
 
 <ContextMenu.Root>
-	<ContextMenu.Trigger {disabled}>
+	<ContextMenu.Trigger {disabled} class="contents">
 		{@render children?.()}
 	</ContextMenu.Trigger>
-	<ContextMenu.Content class="w-48">
-		<ContextMenu.Item onclick={onOpen}>
-			<Eye class="size-4" />
-			查看大图
-		</ContextMenu.Item>
+	<ContextMenu.Content class="z-[100] w-48">
+		{#if showOpen && onOpen}
+			<ContextMenu.Item onclick={onOpen}>
+				<Eye class="size-4" />
+				{openLabel}
+			</ContextMenu.Item>
+		{/if}
 		<ContextMenu.Item onclick={onDownload}>
 			<Download class="size-4" />
 			保存当前

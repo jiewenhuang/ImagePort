@@ -12,11 +12,14 @@ import {
 describe('agent conversation domain', () => {
 	test('creates a user round and uses the first prompt as title', () => {
 		let ids = 0;
-		const conversation = createAgentUserRound(createAgentConversation(100, () => `id-${ids++}`), {
-			prompt: 'generate a calm desktop wallpaper',
-			now: 120,
-			createId: () => `id-${ids++}`
-		});
+		const conversation = createAgentUserRound(
+			createAgentConversation(100, () => `id-${ids++}`),
+			{
+				prompt: 'generate a calm desktop wallpaper',
+				now: 120,
+				createId: () => `id-${ids++}`
+			}
+		);
 
 		expect(conversation.title).toBe('generate a calm desktop wallpape');
 		expect(conversation.rounds.length).toBe(1);
@@ -26,11 +29,14 @@ describe('agent conversation domain', () => {
 
 	test('completes a round with assistant output task ids', () => {
 		let ids = 0;
-		const started = createAgentUserRound(createAgentConversation(100, () => `id-${ids++}`), {
-			prompt: 'draw',
-			now: 120,
-			createId: () => `id-${ids++}`
-		});
+		const started = createAgentUserRound(
+			createAgentConversation(100, () => `id-${ids++}`),
+			{
+				prompt: 'draw',
+				now: 120,
+				createId: () => `id-${ids++}`
+			}
+		);
 		const completed = completeAgentRound(started, started.rounds[0].id, {
 			content: '已生成图片',
 			outputTaskIds: ['task-1'],
@@ -45,13 +51,16 @@ describe('agent conversation domain', () => {
 
 	test('streams assistant text into a running round and preserves metadata on completion', () => {
 		let ids = 0;
-		const started = createAgentUserRound(createAgentConversation(100, () => `id-${ids++}`), {
-			prompt: 'draw',
-			now: 120,
-			maxToolRounds: 8,
-			webSearchEnabled: true,
-			createId: () => `id-${ids++}`
-		});
+		const started = createAgentUserRound(
+			createAgentConversation(100, () => `id-${ids++}`),
+			{
+				prompt: 'draw',
+				now: 120,
+				maxToolRounds: 8,
+				webSearchEnabled: true,
+				createId: () => `id-${ids++}`
+			}
+		);
 		const withAssistant = startAgentAssistantMessage(started, started.rounds[0].id, {
 			content: 'thinking',
 			now: 130,
@@ -80,11 +89,14 @@ describe('agent conversation domain', () => {
 
 	test('marks a running round canceled without treating it as an error', () => {
 		let ids = 0;
-		const started = createAgentUserRound(createAgentConversation(100, () => `id-${ids++}`), {
-			prompt: 'draw',
-			now: 120,
-			createId: () => `id-${ids++}`
-		});
+		const started = createAgentUserRound(
+			createAgentConversation(100, () => `id-${ids++}`),
+			{
+				prompt: 'draw',
+				now: 120,
+				createId: () => `id-${ids++}`
+			}
+		);
 		const canceled = markAgentRoundCanceled(started, started.rounds[0].id, {
 			content: 'stopped',
 			now: 180
@@ -101,17 +113,19 @@ describe('agent conversation domain', () => {
 				id: 'conv',
 				title: '',
 				messages: [{ id: 'msg', role: 'assistant', content: 'ok', roundId: 'round', createdAt: 1 }],
-				rounds: [{
-					id: 'round',
-					index: 1,
-					userMessageId: 'user',
-					prompt: 'hello',
-					status: 'canceled',
-					responseId: 'resp-1',
-					toolCalls: [{ id: 'tool', type: 'web_search_call', status: 'completed', title: 'query' }],
-					webSearchEnabled: true,
-					createdAt: 1
-				}],
+				rounds: [
+					{
+						id: 'round',
+						index: 1,
+						userMessageId: 'user',
+						prompt: 'hello',
+						status: 'canceled',
+						responseId: 'resp-1',
+						toolCalls: [{ id: 'tool', type: 'web_search_call', status: 'completed', title: 'query' }],
+						webSearchEnabled: true,
+						createdAt: 1
+					}
+				],
 				createdAt: 1
 			},
 			{ bad: true }

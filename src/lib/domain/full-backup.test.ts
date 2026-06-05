@@ -38,7 +38,9 @@ describe('full backup helpers', () => {
 			'tasks/task-1/masks/input-1.png'
 		]);
 
-		const files = new Map(payload.files.map((file) => [file.path, `data:image/png;base64,${bytesToBase64(file.data)}`]));
+		const files = new Map(
+			payload.files.map((file) => [file.path, `data:image/png;base64,${bytesToBase64(file.data)}`])
+		);
 		const restored = await restoreFullBackupTasks(payload.manifest, async (path) => files.get(path) ?? null);
 
 		expect(restored[0].images[0]).toBe('data:image/png;base64,b3V0');

@@ -26,10 +26,12 @@
 			role="switch"
 			aria-checked={checked}
 			aria-label={title}
-			disabled={disabled}
+			{disabled}
 			onclick={onToggle}
 		>
-			<span class={`inline-block size-4 rounded-full bg-background shadow transition ${checked ? 'translate-x-4' : 'translate-x-0.5'}`}></span>
+			<span
+				class={`inline-block size-4 rounded-full bg-background shadow transition ${checked ? 'translate-x-4' : 'translate-x-0.5'}`}
+			></span>
 		</button>
 	</div>
 </div>

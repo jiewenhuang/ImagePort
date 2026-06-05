@@ -75,9 +75,16 @@
 
 {#if open}
 	<div class="fixed inset-0 z-[60] flex items-center justify-center p-4">
-		<button type="button" class="absolute inset-0 cursor-default bg-black/30 backdrop-blur-sm" aria-label="关闭尺寸选择" onclick={close}></button>
+		<button
+			type="button"
+			class="absolute inset-0 cursor-default bg-black/30 backdrop-blur-sm"
+			aria-label="关闭尺寸选择"
+			onclick={close}
+		></button>
 
-		<section class="bg-card text-card-foreground relative z-10 flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border shadow-2xl">
+		<section
+			class="bg-card text-card-foreground relative z-10 flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border shadow-2xl"
+		>
 			<header class="border-border flex items-start justify-between gap-4 border-b px-5 py-4">
 				<div>
 					<h2 class="text-base font-semibold">设置图像尺寸</h2>
@@ -90,9 +97,18 @@
 
 			<div class="min-h-0 flex-1 overflow-y-auto px-5 py-5">
 				<div class="bg-muted mb-5 grid grid-cols-3 rounded-lg p-1">
-					<button class={`rounded-md px-3 py-2 text-sm font-medium transition ${mode === 'auto' ? 'bg-background shadow-xs' : 'text-muted-foreground hover:text-foreground'}`} onclick={() => (mode = 'auto')}>自动</button>
-					<button class={`rounded-md px-3 py-2 text-sm font-medium transition ${mode === 'ratio' ? 'bg-background shadow-xs' : 'text-muted-foreground hover:text-foreground'}`} onclick={() => (mode = 'ratio')}>按比例</button>
-					<button class={`rounded-md px-3 py-2 text-sm font-medium transition ${mode === 'resolution' ? 'bg-background shadow-xs' : 'text-muted-foreground hover:text-foreground'}`} onclick={() => (mode = 'resolution')}>自定义宽高</button>
+					<button
+						class={`rounded-md px-3 py-2 text-sm font-medium transition ${mode === 'auto' ? 'bg-background shadow-xs' : 'text-muted-foreground hover:text-foreground'}`}
+						onclick={() => (mode = 'auto')}>自动</button
+					>
+					<button
+						class={`rounded-md px-3 py-2 text-sm font-medium transition ${mode === 'ratio' ? 'bg-background shadow-xs' : 'text-muted-foreground hover:text-foreground'}`}
+						onclick={() => (mode = 'ratio')}>按比例</button
+					>
+					<button
+						class={`rounded-md px-3 py-2 text-sm font-medium transition ${mode === 'resolution' ? 'bg-background shadow-xs' : 'text-muted-foreground hover:text-foreground'}`}
+						onclick={() => (mode = 'resolution')}>自定义宽高</button
+					>
 				</div>
 
 				{#if mode === 'auto'}
@@ -100,7 +116,9 @@
 						<div>
 							<div class="bg-muted mx-auto mb-4 flex size-14 items-center justify-center rounded-lg text-xl">AUTO</div>
 							<p class="text-sm font-medium">自动尺寸</p>
-							<p class="text-muted-foreground mt-2 text-xs leading-relaxed">不向模型传递具体分辨率，由模型决定生成尺寸。</p>
+							<p class="text-muted-foreground mt-2 text-xs leading-relaxed">
+								不向模型传递具体分辨率，由模型决定生成尺寸。
+							</p>
 						</div>
 					</div>
 				{:else if mode === 'ratio'}
@@ -109,7 +127,10 @@
 							<div class="text-muted-foreground mb-2 text-xs font-medium">基准分辨率</div>
 							<div class="grid grid-cols-3 gap-2">
 								{#each tiers as item}
-									<button class={`rounded-lg border px-3 py-2 text-sm transition ${buttonClass(tier === item)}`} onclick={() => (tier = item)}>
+									<button
+										class={`rounded-lg border px-3 py-2 text-sm transition ${buttonClass(tier === item)}`}
+										onclick={() => (tier = item)}
+									>
 										{item}
 									</button>
 								{/each}
@@ -123,7 +144,10 @@
 									{@const parts = item.value.split(':').map(Number)}
 									{@const wide = parts[0] > parts[1]}
 									{@const square = parts[0] === parts[1]}
-									<button class={`flex flex-col items-center gap-1.5 rounded-lg border px-2 py-2 text-xs transition ${buttonClass(ratio === item.value)}`} onclick={() => (ratio = item.value)}>
+									<button
+										class={`flex flex-col items-center gap-1.5 rounded-lg border px-2 py-2 text-xs transition ${buttonClass(ratio === item.value)}`}
+										onclick={() => (ratio = item.value)}
+									>
 										<span class="flex size-5 items-center justify-center">
 											<span
 												class="rounded-[3px] border border-current opacity-70"
@@ -133,7 +157,10 @@
 										<span>{item.label}</span>
 									</button>
 								{/each}
-								<button class={`col-span-4 rounded-lg border px-3 py-2 text-sm transition ${buttonClass(ratio === 'custom')}`} onclick={() => (ratio = 'custom')}>
+								<button
+									class={`col-span-4 rounded-lg border px-3 py-2 text-sm transition ${buttonClass(ratio === 'custom')}`}
+									onclick={() => (ratio = 'custom')}
+								>
 									自定义比例
 								</button>
 							</div>
@@ -142,7 +169,12 @@
 						{#if ratio === 'custom'}
 							<label class="block space-y-1.5">
 								<span class="text-muted-foreground text-xs font-medium">输入自定义比例</span>
-								<Input bind:value={customRatio} name="customRatio" class={customRatioValid ? '' : 'border-destructive focus-visible:ring-destructive/30'} placeholder="例如 5:4 / 2.39:1" />
+								<Input
+									bind:value={customRatio}
+									name="customRatio"
+									class={customRatioValid ? '' : 'border-destructive focus-visible:ring-destructive/30'}
+									placeholder="例如 5:4 / 2.39:1"
+								/>
 							</label>
 						{/if}
 					</div>
@@ -159,7 +191,9 @@
 								<Input bind:value={customHeight} name="customHeight" type="number" min="1" placeholder="1024" />
 							</label>
 						</div>
-						<div class="border-border bg-muted/50 rounded-lg border px-3 py-3 text-xs leading-relaxed text-muted-foreground">
+						<div
+							class="border-border bg-muted/50 rounded-lg border px-3 py-3 text-xs leading-relaxed text-muted-foreground"
+						>
 							{sizeLimitText}
 						</div>
 					</div>

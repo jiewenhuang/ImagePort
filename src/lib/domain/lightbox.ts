@@ -11,7 +11,7 @@ export const LIGHTBOX_SCALE_STEP = 0.5;
 export function getWrappedImageIndex(currentIndex: number, delta: number, total: number): number {
 	if (!Number.isFinite(total) || total <= 0) return 0;
 	const index = Math.trunc(currentIndex);
-	return ((index + Math.trunc(delta)) % total + total) % total;
+	return (((index + Math.trunc(delta)) % total) + total) % total;
 }
 
 export function zoomLightboxTransform(

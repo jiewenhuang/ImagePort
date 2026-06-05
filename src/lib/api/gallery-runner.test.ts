@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { DEFAULT_SETTINGS } from '$lib/domain/settings';
-import { DEFAULT_PARAMS, type NativeJsonRequest, type NativeMultipartRequest } from '$lib/domain/types';
+import { DEFAULT_PARAMS, type NativeJsonRequest } from '$lib/domain/types';
 import { runGalleryImageRequestGroup } from './gallery-runner';
 
 const profile = {
@@ -49,7 +49,10 @@ describe('gallery runner', () => {
 
 		expect(sentRequestIds).toEqual(['req-1']);
 		expect(summary.status).toBe('done');
-		expect(summary.images).toEqual(['data:image/png;base64,one', 'data:image/png;base64,downloaded:https://example.com/two.png']);
+		expect(summary.images).toEqual([
+			'data:image/png;base64,one',
+			'data:image/png;base64,downloaded:https://example.com/two.png'
+		]);
 		expect(summary.revisedPrompts).toEqual(['one revised', 'two revised']);
 		expect(summary.rawImageUrls).toEqual(['https://example.com/two.png']);
 	});

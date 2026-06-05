@@ -185,7 +185,7 @@
 	let hasHydratedInputDraft = $state(false);
 	let hasHydratedTasks = $state(false);
 	let taskHydrationFailed = $state(false);
-	let fileInput: HTMLInputElement;
+	let fileInput: HTMLInputElement | undefined;
 	let agentMessagesViewport = $state<HTMLDivElement>();
 	const taskPersistence = createTaskPersistenceController({
 		storageKey: TASKS_STORAGE_KEY,
@@ -200,7 +200,13 @@
 
 	let activeFavoriteCollectionId = $derived(settings.activeFavoriteCollectionId);
 	let favoriteCollections = $derived(settings.favoriteCollections as FavoriteCollection[]);
-	let filteredTasks = $derived(filterGalleryTasks(tasks, { status: filterStatus, query: searchQuery, favoriteCollectionId: activeFavoriteCollectionId }));
+	let filteredTasks = $derived(
+		filterGalleryTasks(tasks, {
+			status: filterStatus,
+			query: searchQuery,
+			favoriteCollectionId: activeFavoriteCollectionId
+		})
+	);
 	let visibleTasks = $derived(
 		getVisibleGalleryTasks(tasks, {
 			status: filterStatus,
@@ -213,7 +219,9 @@
 	let selectedDownloadableTasks = $derived(getSelectedCompletedTasks(tasks, selectedTaskIds));
 	let activeFavoriteDownloadableTasks = $derived(
 		activeFavoriteCollectionId
-			? filteredTasks.filter((task) => task.status !== 'running' && (task.images.length > 0 || task.streamPartialImageIds.length > 0))
+			? filteredTasks.filter(
+					(task) => task.status !== 'running' && (task.images.length > 0 || task.streamPartialImageIds.length > 0)
+				)
 			: []
 	);
 	let selectedTask = $derived(tasks.find((task) => task.id === selectedTaskId) ?? null);
@@ -222,26 +230,31 @@
 	let activeProfile = $derived(getActiveProfile(settings));
 	let effectiveGalleryProfile = $derived(
 		nextGalleryProfileOverrideId
-			? settings.profiles.find((profile) => profile.id === nextGalleryProfileOverrideId) ?? activeProfile
+			? (settings.profiles.find((profile) => profile.id === nextGalleryProfileOverrideId) ?? activeProfile)
 			: activeProfile
 	);
 	let profileBlockReason = $derived(getProfileRequestBlockReason(effectiveGalleryProfile, settings));
 	let agentBlockReason = $derived(getAgentRequestBlockReason(activeProfile, settings));
-	let activeParams = $derived(normalizeParamsForRequest(params, appMode === 'agent' ? activeProfile : effectiveGalleryProfile, appMode));
+	let activeParams = $derived(
+		normalizeParamsForRequest(params, appMode === 'agent' ? activeProfile : effectiveGalleryProfile, appMode)
+	);
 	let canSubmit = $derived(Boolean(prompt.trim()) && !profileBlockReason);
 	let canSubmitAgent = $derived(Boolean(agentPrompt.trim()) && !agentBlockReason);
 	let tasksStorageBytes = $derived(estimateTasksStorageBytes(tasks));
 	let activeAgentConversation = $derived(
-		agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ?? agentConversations[0] ?? null
+		agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ??
+			agentConversations[0] ??
+			null
 	);
 	let activeAgentTasks = $derived(
-		activeAgentConversation
-			? tasks.filter((task) => task.agentConversationId === activeAgentConversation.id)
-			: []
+		activeAgentConversation ? tasks.filter((task) => task.agentConversationId === activeAgentConversation.id) : []
 	);
 
 	$effect(() => {
-		if (nextGalleryProfileOverrideId && !settings.profiles.some((profile) => profile.id === nextGalleryProfileOverrideId)) {
+		if (
+			nextGalleryProfileOverrideId &&
+			!settings.profiles.some((profile) => profile.id === nextGalleryProfileOverrideId)
+		) {
 			nextGalleryProfileOverrideId = null;
 		}
 	});
@@ -251,7 +264,11 @@
 	});
 
 	$effect(() => {
-		const nextParams = normalizeParamsForRequest(params, appMode === 'agent' ? activeProfile : effectiveGalleryProfile, appMode);
+		const nextParams = normalizeParamsForRequest(
+			params,
+			appMode === 'agent' ? activeProfile : effectiveGalleryProfile,
+			appMode
+		);
 		if (nextParams.n !== params.n) params = nextParams;
 	});
 
@@ -316,7 +333,9 @@
 			const storedTasks = await loadStoredTasks();
 			const savedTasks = resolveStoredTasks(storedTasks, readLocalStorageJson(TASKS_STORAGE_KEY));
 			if (savedTasks && isMounted()) {
-				const normalizedFavorites = normalizeTaskFavorites(tasks.length ? mergeTaskSnapshots(tasks, savedTasks) : savedTasks);
+				const normalizedFavorites = normalizeTaskFavorites(
+					tasks.length ? mergeTaskSnapshots(tasks, savedTasks) : savedTasks
+				);
 				tasks = normalizedFavorites;
 			}
 			if (isMounted()) {
@@ -333,7 +352,8 @@
 			if (isMounted() && tasksHydrated) hasHydratedTasks = true;
 		}
 		try {
-			const storedAgentConversations = (await loadStoredAgentConversations()) ?? normalizeAgentConversations(readLocalStorageJson(AGENT_STORAGE_KEY));
+			const storedAgentConversations =
+				(await loadStoredAgentConversations()) ?? normalizeAgentConversations(readLocalStorageJson(AGENT_STORAGE_KEY));
 			if (isMounted()) {
 				agentConversations = storedAgentConversations.length ? storedAgentConversations : [createAgentConversation()];
 				activeAgentConversationId = agentConversations[0]?.id ?? null;
@@ -375,10 +395,10 @@
 
 	$effect(() => {
 		if (!settings.agentAutoScroll || appMode !== 'agent' || !agentMessagesViewport) return;
-		agentConversations;
-		tasks;
+		const autoScrollKey = `${agentConversations.length}:${tasks.length}`;
 		const viewport = agentMessagesViewport;
 		requestAnimationFrame(() => {
+			if (!autoScrollKey) return;
 			viewport.scrollTop = viewport.scrollHeight;
 		});
 	});
@@ -424,13 +444,18 @@
 			description: `预计生成 ${formatExpectedImageCount(taskParams.n)}`
 		});
 
-		void runTaskGeneration(taskId, {
-			settings,
-			profile: submitProfile,
-			...submitProfile,
-			prompt: trimmedPrompt,
-			params: taskParams
-		}, taskInputImages, taskMask);
+		void runTaskGeneration(
+			taskId,
+			{
+				settings,
+				profile: submitProfile,
+				...submitProfile,
+				prompt: trimmedPrompt,
+				params: taskParams
+			},
+			taskInputImages,
+			taskMask
+		);
 		nextGalleryProfileOverrideId = null;
 
 		if (settings.clearInputAfterSubmit) {
@@ -499,11 +524,11 @@
 			agentRoundId: round.id,
 			agentMessageId: round.userMessageId,
 			agentToolAction: input.inputImages.length ? 'edit' : 'generate'
-			});
-			tasks = nextTasks;
-			if (nextTasks[0]) await taskPersistence.persistTaskSnapshotNow(nextTasks[0]);
-			toast.info('Agent 轮次已开始', { description: `预计生成 ${formatExpectedImageCount(input.params.n)}` });
-			void runAgentResponsesRound({
+		});
+		tasks = nextTasks;
+		if (nextTasks[0]) await taskPersistence.persistTaskSnapshotNow(nextTasks[0]);
+		toast.info('Agent 轮次已开始', { description: `预计生成 ${formatExpectedImageCount(input.params.n)}` });
+		void runAgentResponsesRound({
 			conversationId: withAssistant.id,
 			roundId: round.id,
 			taskId,
@@ -607,13 +632,13 @@
 							streamPartialImageIds: result.streamPartialImages
 						}
 					: task
-				);
-				tasks = nextTasks;
-				const updatedTask = nextTasks.find((task) => task.id === taskId);
-				if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
-				if (result.status === 'done') {
-					toast.success('生成完成', { description: formatActualImageCount(result.images.length, requestInput.params.n) });
-				} else {
+			);
+			tasks = nextTasks;
+			const updatedTask = nextTasks.find((task) => task.id === taskId);
+			if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
+			if (result.status === 'done') {
+				toast.success('生成完成', { description: formatActualImageCount(result.images.length, requestInput.params.n) });
+			} else {
 				toast.warning('部分生成完成', {
 					description: `${formatActualImageCount(result.images.length, requestInput.params.n)}，${result.failureCount} 个请求失败`
 				});
@@ -633,12 +658,12 @@
 							failureCount: getFailureCountForParams(task.params.n, 0)
 						}
 					: task
-				);
-				tasks = nextTasks;
-				const updatedTask = nextTasks.find((task) => task.id === taskId);
-				if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
-			}
+			);
+			tasks = nextTasks;
+			const updatedTask = nextTasks.find((task) => task.id === taskId);
+			if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
 		}
+	}
 
 	async function runAgentResponsesRound(input: {
 		conversationId: string;
@@ -714,7 +739,9 @@
 			if (result.images.length) {
 				toast.success('Agent 生成完成', { description: formatActualImageCount(result.images.length, input.params.n) });
 			} else if (result.partialImages.length) {
-				toast.warning('Agent 只返回了 partial 图片', { description: `${result.partialImages.length} 张 partial 已保留` });
+				toast.warning('Agent 只返回了 partial 图片', {
+					description: `${result.partialImages.length} 张 partial 已保留`
+				});
 			} else {
 				toast.error('Agent 没有返回图片');
 			}
@@ -734,12 +761,12 @@
 							failureCount: getFailureCountForParams(task.params.n, task.images.length)
 						}
 					: task
-				);
-				tasks = nextTasks;
-				const updatedTask = nextTasks.find((task) => task.id === input.taskId);
-				if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
-				const conversation = getAgentConversation(input.conversationId);
-				if (conversation) {
+			);
+			tasks = nextTasks;
+			const updatedTask = nextTasks.find((task) => task.id === input.taskId);
+			if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
+			const conversation = getAgentConversation(input.conversationId);
+			if (conversation) {
 				agentConversations = upsertAgentConversation(
 					agentConversations,
 					completeAgentRound(conversation, input.roundId, {
@@ -771,7 +798,9 @@
 		return Object.fromEntries(
 			images
 				.map((_, index) => [String(index), actualParamsList[index]] as const)
-				.filter((entry): entry is readonly [string, Partial<TaskParams>] => Boolean(entry[1] && Object.keys(entry[1]).length > 0))
+				.filter((entry): entry is readonly [string, Partial<TaskParams>] =>
+					Boolean(entry[1] && Object.keys(entry[1]).length > 0)
+				)
 		);
 	}
 
@@ -779,7 +808,9 @@
 		return Object.fromEntries(
 			images
 				.map((_, index) => [String(index), revisedPrompts[index]] as const)
-				.filter((entry): entry is readonly [string, string] => typeof entry[1] === 'string' && entry[1].trim().length > 0)
+				.filter(
+					(entry): entry is readonly [string, string] => typeof entry[1] === 'string' && entry[1].trim().length > 0
+				)
 		);
 	}
 
@@ -797,12 +828,14 @@
 
 	function toggleTaskFavorite(taskId: string) {
 		const nextTasks = tasks.map((task) =>
-			task.id === taskId ? toggleTaskFavoriteCollection(task, settings.defaultFavoriteCollectionId || DEFAULT_FAVORITE_COLLECTION_ID) : task
-			);
-			tasks = nextTasks;
-			const updatedTask = nextTasks.find((task) => task.id === taskId);
-			if (updatedTask) void taskPersistence.persistTaskSnapshotNow(updatedTask);
-		}
+			task.id === taskId
+				? toggleTaskFavoriteCollection(task, settings.defaultFavoriteCollectionId || DEFAULT_FAVORITE_COLLECTION_ID)
+				: task
+		);
+		tasks = nextTasks;
+		const updatedTask = nextTasks.find((task) => task.id === taskId);
+		if (updatedTask) void taskPersistence.persistTaskSnapshotNow(updatedTask);
+	}
 
 	function normalizeTaskFavorites(nextTasks: TaskRecord[]) {
 		return nextTasks.map((task) => normalizeTaskFavoriteCollections(task, favoriteCollections));
@@ -850,27 +883,29 @@
 		canceledAgentRoundIds = [...new Set([...canceledAgentRoundIds, roundId])];
 		agentConversations = upsertAgentConversation(
 			agentConversations,
-			markAgentRoundCanceled(activeAgentConversation, roundId, { content: '已停止。已返回的 partial 图片会保留在关联任务里。' })
+			markAgentRoundCanceled(activeAgentConversation, roundId, {
+				content: '已停止。已返回的 partial 图片会保留在关联任务里。'
+			})
 		);
 		const nextTasks = tasks.map((task) =>
 			task.agentRoundId === roundId && task.status === 'running'
 				? {
 						...task,
-						status: task.streamPartialImageIds.length ? 'partial' as const : 'error' as const,
+						status: task.streamPartialImageIds.length ? ('partial' as const) : ('error' as const),
 						error: task.streamPartialImageIds.length ? null : '用户停止了 Agent 轮次',
 						finishedAt: Date.now(),
 						failureCount: getFailureCountForParams(task.params.n, task.images.length)
 					}
 				: task
-			);
-			tasks = nextTasks;
-			void Promise.all(
-				nextTasks
-					.filter((task) => task.agentRoundId === roundId)
-					.map((task) => taskPersistence.persistTaskSnapshotNow(task))
-			);
-			toast.info('Agent 轮次已停止');
-		}
+		);
+		tasks = nextTasks;
+		void Promise.all(
+			nextTasks
+				.filter((task) => task.agentRoundId === roundId)
+				.map((task) => taskPersistence.persistTaskSnapshotNow(task))
+		);
+		toast.info('Agent 轮次已停止');
+	}
 
 	function retryAgentRound(roundId: string) {
 		const round = activeAgentConversation?.rounds.find((item) => item.id === roundId);
@@ -968,7 +1003,8 @@
 		settings = normalizeSettings({
 			...settings,
 			favoriteCollections: result.collections,
-			activeFavoriteCollectionId: settings.activeFavoriteCollectionId === collectionId ? null : settings.activeFavoriteCollectionId
+			activeFavoriteCollectionId:
+				settings.activeFavoriteCollectionId === collectionId ? null : settings.activeFavoriteCollectionId
 		});
 		void taskPersistence.persistTasksSnapshot(result.tasks, { allowEmpty: true });
 	}
@@ -1097,7 +1133,7 @@
 		const name =
 			activeFavoriteCollectionId === ALL_FAVORITES_COLLECTION_ID
 				? 'all-favorites'
-				: favoriteCollections.find((collection) => collection.id === activeFavoriteCollectionId)?.name ?? 'favorites';
+				: (favoriteCollections.find((collection) => collection.id === activeFavoriteCollectionId)?.name ?? 'favorites');
 		const fileName = `imageport-${createSafeExportName(name)}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.zip`;
 		saveTasksZip(activeFavoriteDownloadableTasks, fileName, '当前收藏集合没有可下载的图片');
 	}
@@ -1118,7 +1154,9 @@
 			showTaskDetail = false;
 		}
 		void taskPersistence.persistTasksSnapshot(nextTasks, { allowEmpty: true });
-		const failedImageCleanupCount = taskToRemove ? await deleteTaskImageFilesWithReport([taskToRemove], deleteTaskImageFiles) : 0;
+		const failedImageCleanupCount = taskToRemove
+			? await deleteTaskImageFilesWithReport([taskToRemove], deleteTaskImageFiles)
+			: 0;
 		if (failedImageCleanupCount) {
 			toast.warning('任务已删除', { description: '关联图片文件清理失败，可稍后在设置中清理无引用图片' });
 		} else {
@@ -1203,7 +1241,8 @@
 	}
 
 	function normalizeParamsForRequest(value: TaskParams, profile: ApiProfile, mode: 'gallery' | 'agent'): TaskParams {
-		const modelControlsOutputCount = mode === 'agent' || (profile.provider === 'openai' && profile.apiMode === 'responses');
+		const modelControlsOutputCount =
+			mode === 'agent' || (profile.provider === 'openai' && profile.apiMode === 'responses');
 		if (modelControlsOutputCount) return { ...value, n: 'auto' };
 		return {
 			...value,
@@ -1264,7 +1303,12 @@
 	}
 
 	function isInputImage(value: unknown): value is InputImage {
-		return Boolean(value) && typeof value === 'object' && typeof (value as InputImage).id === 'string' && typeof (value as InputImage).dataUrl === 'string';
+		return (
+			Boolean(value) &&
+			typeof value === 'object' &&
+			typeof (value as InputImage).id === 'string' &&
+			typeof (value as InputImage).dataUrl === 'string'
+		);
 	}
 
 	function notifyTaskCompleted(taskPrompt: string, actualCount: number, expectedCount: OutputImageCount) {
@@ -1409,10 +1453,7 @@
 	function exportFullBackup() {
 		const payload = buildFullBackupPayload(tasks, settings, Date.now(), agentConversations);
 		const manifestBytes = new TextEncoder().encode(JSON.stringify(payload.manifest, null, 2));
-		const blob = createZipBlob([
-			{ path: 'manifest.json', data: manifestBytes },
-			...payload.files
-		]);
+		const blob = createZipBlob([{ path: 'manifest.json', data: manifestBytes }, ...payload.files]);
 		const fileName = `imageport-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.zip`;
 		void saveBlobToFile(blob, fileName)
 			.then((saved) => {
@@ -1436,7 +1477,9 @@
 		const entries = readStoredZipEntries(new Uint8Array(await file.arrayBuffer()));
 		const manifestBytes = entries.get('manifest.json');
 		if (!manifestBytes) throw new Error('备份 ZIP 缺少 manifest.json');
-		const manifest = JSON.parse(new TextDecoder().decode(manifestBytes)) as Parameters<typeof restoreFullBackupTasks>[0];
+		const manifest = JSON.parse(new TextDecoder().decode(manifestBytes)) as Parameters<
+			typeof restoreFullBackupTasks
+		>[0];
 		const restoredTasks = await restoreFullBackupTasks(manifest, async (path) => {
 			const bytes = entries.get(path);
 			return bytes ? imageBytesToDataUrl(bytes, path) : null;
@@ -1552,7 +1595,13 @@
 	}
 
 	function createSafeExportName(value: string) {
-		return value.trim().replace(/[^a-zA-Z0-9\u4e00-\u9fa5._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'imageport';
+		return (
+			value
+				.trim()
+				.replace(/[^a-zA-Z0-9\u4e00-\u9fa5._-]+/g, '-')
+				.replace(/^-+|-+$/g, '')
+				.slice(0, 48) || 'imageport'
+		);
 	}
 </script>
 
@@ -1612,337 +1661,470 @@
 		onpointercancel={stopDragSelection}
 	>
 		{#if appMode === 'gallery'}
-		<div class="mx-auto max-w-7xl">
-			<div data-no-drag-select class="sticky top-0 z-20 bg-background/95 pt-5 pb-4 backdrop-blur">
-				<div class="flex gap-3">
-					<div class="relative w-32 shrink-0">
-						<Select bind:value={filterStatus} name="filterStatus" class="h-10 rounded-lg">
-							<option value="all">全部状态</option>
-							<option value="done">已完成</option>
-							<option value="partial">部分完成</option>
-							<option value="running">生成中</option>
-							<option value="error">失败</option>
-						</Select>
+			<div class="mx-auto max-w-7xl">
+				<div data-no-drag-select class="sticky top-0 z-20 bg-background/95 pt-5 pb-4 backdrop-blur">
+					<div class="flex gap-3">
+						<div class="relative w-32 shrink-0">
+							<Select bind:value={filterStatus} name="filterStatus" class="h-10 rounded-lg">
+								<option value="all">全部状态</option>
+								<option value="done">已完成</option>
+								<option value="partial">部分完成</option>
+								<option value="running">生成中</option>
+								<option value="error">失败</option>
+							</Select>
+						</div>
+						<div class="relative min-w-0 flex-1">
+							<Search
+								class="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2"
+							/>
+							<Input
+								bind:value={searchQuery}
+								name="searchQuery"
+								class="h-10 rounded-lg pl-9"
+								placeholder="搜索提示词、参数..."
+							/>
+						</div>
+						<DropdownMenu.Root>
+							<DropdownMenu.Trigger>
+								<Button
+									type="button"
+									variant={activeFavoriteCollectionId ? 'secondary' : 'outline'}
+									class="h-10 shrink-0"
+								>
+									<Heart class={`size-4 ${activeFavoriteCollectionId ? 'fill-current' : ''}`} />
+									{activeFavoriteCollectionId === ALL_FAVORITES_COLLECTION_ID
+										? '全部收藏'
+										: (favoriteCollections.find((collection) => collection.id === activeFavoriteCollectionId)?.name ??
+											'收藏')}
+								</Button>
+							</DropdownMenu.Trigger>
+							<DropdownMenu.Content align="end" class="w-72">
+								<DropdownMenu.Item onclick={() => setActiveFavoriteCollection(null)}>
+									<Heart class="size-4" />
+									全部任务
+								</DropdownMenu.Item>
+								<DropdownMenu.Item onclick={() => setActiveFavoriteCollection(ALL_FAVORITES_COLLECTION_ID)}>
+									<Heart class="size-4 fill-current text-rose-600" />
+									全部收藏
+								</DropdownMenu.Item>
+								<DropdownMenu.Separator />
+								{#each favoriteCollections as collection}
+									<div class="flex items-center gap-1 rounded-sm px-1 py-1">
+										{#if renamingCollectionId === collection.id}
+											<Input
+												bind:value={renamingCollectionName}
+												name={`rename-${collection.id}`}
+												class="h-8 flex-1 text-xs"
+												onclick={(event) => event.stopPropagation()}
+												onkeydown={(event) => {
+													if (event.key === 'Enter') saveRenameCollection();
+													if (event.key === 'Escape') {
+														renamingCollectionId = null;
+														renamingCollectionName = '';
+													}
+												}}
+											/>
+											<Button type="button" variant="ghost" size="xs" onclick={saveRenameCollection}>保存</Button>
+										{:else}
+											<button
+												type="button"
+												class={`hover:bg-accent flex h-8 min-w-0 flex-1 items-center gap-2 rounded-sm px-2 text-left text-sm ${activeFavoriteCollectionId === collection.id ? 'bg-accent text-accent-foreground' : ''}`}
+												onclick={() => setActiveFavoriteCollection(collection.id)}
+											>
+												<Heart class="size-4" />
+												<span class="truncate">{collection.name}</span>
+											</button>
+											<Button type="button" variant="ghost" size="xs" onclick={() => startRenameCollection(collection)}
+												>重命名</Button
+											>
+											<Button
+												type="button"
+												variant="ghost"
+												size="icon-xs"
+												disabled={collection.id === DEFAULT_FAVORITE_COLLECTION_ID}
+												onclick={() => removeCollection(collection.id)}
+												aria-label="删除收藏集合"
+											>
+												<Trash2 class="size-3.5" />
+											</Button>
+										{/if}
+									</div>
+								{/each}
+								{#if activeFavoriteCollectionId && isZipRouteEnabled('favorite-collection-selection')}
+									<DropdownMenu.Separator />
+									<DropdownMenu.Item
+										onclick={downloadActiveFavoriteCollectionZip}
+										disabled={!activeFavoriteDownloadableTasks.length}
+									>
+										<Download class="size-4" />
+										下载当前集合 ZIP
+									</DropdownMenu.Item>
+								{/if}
+								<DropdownMenu.Separator />
+								<div class="flex gap-2 p-1" role="presentation" onpointerdown={(event) => event.stopPropagation()}>
+									<Input
+										bind:value={newCollectionName}
+										name="newFavoriteCollection"
+										class="h-8 text-xs"
+										placeholder="新收藏集合"
+									/>
+									<Button type="button" variant="outline" size="sm" onclick={createCollection}>创建</Button>
+								</div>
+							</DropdownMenu.Content>
+						</DropdownMenu.Root>
+						<Button
+							type="button"
+							variant={selectionMode ? 'secondary' : 'outline'}
+							class="h-10 shrink-0"
+							onclick={toggleSelectionMode}
+						>
+							{#if selectionMode}
+								<CheckSquare class="size-4" />
+							{:else}
+								<Square class="size-4" />
+							{/if}
+							选择
+						</Button>
 					</div>
-					<div class="relative min-w-0 flex-1">
-						<Search class="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
-						<Input bind:value={searchQuery} name="searchQuery" class="h-10 rounded-lg pl-9" placeholder="搜索提示词、参数..." />
-					</div>
-					<DropdownMenu.Root>
-						<DropdownMenu.Trigger>
-							<Button type="button" variant={activeFavoriteCollectionId ? 'secondary' : 'outline'} class="h-10 shrink-0">
-								<Heart class={`size-4 ${activeFavoriteCollectionId ? 'fill-current' : ''}`} />
-								{activeFavoriteCollectionId === ALL_FAVORITES_COLLECTION_ID
-									? '全部收藏'
-									: favoriteCollections.find((collection) => collection.id === activeFavoriteCollectionId)?.name ?? '收藏'}
-							</Button>
-						</DropdownMenu.Trigger>
-						<DropdownMenu.Content align="end" class="w-72">
-							<DropdownMenu.Item onclick={() => setActiveFavoriteCollection(null)}>
-								<Heart class="size-4" />
-								全部任务
-							</DropdownMenu.Item>
-							<DropdownMenu.Item onclick={() => setActiveFavoriteCollection(ALL_FAVORITES_COLLECTION_ID)}>
-								<Heart class="size-4 fill-current text-rose-600" />
-								全部收藏
-							</DropdownMenu.Item>
-							<DropdownMenu.Separator />
-							{#each favoriteCollections as collection}
-								<div class="flex items-center gap-1 rounded-sm px-1 py-1">
-									{#if renamingCollectionId === collection.id}
-										<Input
-											bind:value={renamingCollectionName}
-											name={`rename-${collection.id}`}
-											class="h-8 flex-1 text-xs"
-											onclick={(event) => event.stopPropagation()}
-											onkeydown={(event) => {
-												if (event.key === 'Enter') saveRenameCollection();
-												if (event.key === 'Escape') {
-													renamingCollectionId = null;
-													renamingCollectionName = '';
-												}
-											}}
-										/>
-										<Button type="button" variant="ghost" size="xs" onclick={saveRenameCollection}>保存</Button>
+
+					{#if selectionMode || selectedTaskIds.length > 0}
+						<div
+							class="border-border bg-card mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2 shadow-xs"
+						>
+							<div class="flex min-w-0 items-center gap-2 text-sm">
+								<CheckSquare class="text-primary size-4" />
+								<span class="font-medium">已选 {selectedTaskIds.length} 个任务</span>
+								<Badge variant="secondary">可下载 {selectedDownloadableTasks.length}</Badge>
+							</div>
+							<div class="flex flex-wrap items-center gap-2">
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									onclick={selectAllVisibleTasks}
+									disabled={!visibleTasks.length}
+								>
+									全选当前
+								</Button>
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									onclick={invertVisibleTaskSelection}
+									disabled={!visibleTasks.length}
+								>
+									反选
+								</Button>
+								{#if isZipRouteEnabled('task-selection')}
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										onclick={downloadSelectedTasksZip}
+										disabled={!selectedDownloadableTasks.length}
+									>
+										<Download class="size-4" />
+										ZIP 下载
+									</Button>
+								{/if}
+								<AlertDialog.Root bind:open={showBulkDeleteDialog}>
+									<AlertDialog.Trigger>
+										<Button type="button" variant="destructive" size="sm" disabled={!selectedTaskIds.length}>
+											<Trash2 class="size-4" />
+											删除
+										</Button>
+									</AlertDialog.Trigger>
+									<AlertDialog.Content>
+										<AlertDialog.Header>
+											<AlertDialog.Title>删除所选任务？</AlertDialog.Title>
+											<AlertDialog.Description>
+												将删除 {selectedTaskIds.length} 个任务及其本地图片文件。此操作不可恢复。
+											</AlertDialog.Description>
+										</AlertDialog.Header>
+										<AlertDialog.Footer>
+											<AlertDialog.Cancel>取消</AlertDialog.Cancel>
+											<AlertDialog.Action onclick={removeSelectedTasks}>确认删除</AlertDialog.Action>
+										</AlertDialog.Footer>
+									</AlertDialog.Content>
+								</AlertDialog.Root>
+								<Button type="button" variant="ghost" size="sm" onclick={clearTaskSelection}>取消</Button>
+							</div>
+						</div>
+					{/if}
+				</div>
+
+				{#if visibleTasks.length === 0}
+					<section
+						class="border-border/80 bg-muted/20 flex min-h-[calc(100vh-24rem)] items-center justify-center rounded-lg border border-dashed p-10 text-center"
+					>
+						<div>
+							<div
+								class="bg-background border-border mx-auto mb-4 flex size-12 items-center justify-center rounded-lg border"
+							>
+								<ImageIcon class="text-muted-foreground size-5" />
+							</div>
+							<p class="text-lg font-medium">暂无图片</p>
+							<p class="text-muted-foreground mt-1 text-sm">在底部输入提示词开始生成。</p>
+						</div>
+					</section>
+				{:else}
+					<section class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+						{#each visibleTasks as task}
+							{@const previewImages = task.images.length
+								? getTaskPreviewImages(task)
+								: task.streamPartialImageIds.slice(-4)}
+							{@const isSelected = selectedTaskIds.includes(task.id)}
+							<article
+								data-task-card-id={task.id}
+								class={`border-border bg-card group overflow-hidden rounded-lg border shadow-xs ${isSelected ? 'border-primary ring-ring ring-2' : ''}`}
+							>
+								<div class="bg-muted relative aspect-square w-full overflow-hidden">
+									{#if task.images[0] || task.streamPartialImageIds[0]}
+										<ImageActionContextMenu
+											canDownloadAll={getTaskDownloadableImageCount(task) > 1}
+											canUseAsReference
+											canEditMask={Boolean(task.images[0])}
+											onOpen={() =>
+												task.images[0]
+													? openTaskLightbox(task, 0)
+													: openImagesLightbox(task.streamPartialImageIds, 0, `${task.prompt} partial`, task.id)}
+											onDownload={() => downloadImage(task.images[0] ?? task.streamPartialImageIds[0], task, 0)}
+											onDownloadAll={() => downloadTaskZip(task)}
+											onCopy={() => copyImage(task.images[0] ?? task.streamPartialImageIds[0])}
+											onUseAsReference={() =>
+												void addDataUrlAsReference(
+													task.images[0] ?? task.streamPartialImageIds[0],
+													`partial-${task.id}-1.png`
+												)}
+											onEditMask={() => (task.images[0] ? void editOutputWithMask(task, 0) : undefined)}
+										>
+											<button
+												type="button"
+												class="absolute inset-0 z-[1] block w-full text-left"
+												onclick={() => openTask(task)}
+												aria-label="打开任务详情"
+											></button>
+										</ImageActionContextMenu>
 									{:else}
 										<button
 											type="button"
-											class={`hover:bg-accent flex h-8 min-w-0 flex-1 items-center gap-2 rounded-sm px-2 text-left text-sm ${activeFavoriteCollectionId === collection.id ? 'bg-accent text-accent-foreground' : ''}`}
-											onclick={() => setActiveFavoriteCollection(collection.id)}
-										>
-											<Heart class="size-4" />
-											<span class="truncate">{collection.name}</span>
-										</button>
-										<Button type="button" variant="ghost" size="xs" onclick={() => startRenameCollection(collection)}>重命名</Button>
-										<Button type="button" variant="ghost" size="icon-xs" disabled={collection.id === DEFAULT_FAVORITE_COLLECTION_ID} onclick={() => removeCollection(collection.id)} aria-label="删除收藏集合">
-											<Trash2 class="size-3.5" />
-										</Button>
+											class="absolute inset-0 z-[1] block w-full text-left"
+											onclick={() => openTask(task)}
+											aria-label="打开任务详情"
+										></button>
 									{/if}
-								</div>
-							{/each}
-							{#if activeFavoriteCollectionId && isZipRouteEnabled('favorite-collection-selection')}
-								<DropdownMenu.Separator />
-								<DropdownMenu.Item onclick={downloadActiveFavoriteCollectionZip} disabled={!activeFavoriteDownloadableTasks.length}>
-									<Download class="size-4" />
-									下载当前集合 ZIP
-								</DropdownMenu.Item>
-							{/if}
-							<DropdownMenu.Separator />
-							<div class="flex gap-2 p-1" role="presentation" onpointerdown={(event) => event.stopPropagation()}>
-								<Input bind:value={newCollectionName} name="newFavoriteCollection" class="h-8 text-xs" placeholder="新收藏集合" />
-								<Button type="button" variant="outline" size="sm" onclick={createCollection}>创建</Button>
-							</div>
-						</DropdownMenu.Content>
-					</DropdownMenu.Root>
-					<Button type="button" variant={selectionMode ? 'secondary' : 'outline'} class="h-10 shrink-0" onclick={toggleSelectionMode}>
-						{#if selectionMode}
-							<CheckSquare class="size-4" />
-						{:else}
-							<Square class="size-4" />
-						{/if}
-						选择
-					</Button>
-				</div>
-
-				{#if selectionMode || selectedTaskIds.length > 0}
-					<div class="border-border bg-card mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2 shadow-xs">
-						<div class="flex min-w-0 items-center gap-2 text-sm">
-							<CheckSquare class="text-primary size-4" />
-							<span class="font-medium">已选 {selectedTaskIds.length} 个任务</span>
-							<Badge variant="secondary">可下载 {selectedDownloadableTasks.length}</Badge>
-						</div>
-						<div class="flex flex-wrap items-center gap-2">
-							<Button type="button" variant="outline" size="sm" onclick={selectAllVisibleTasks} disabled={!visibleTasks.length}>
-								全选当前
-							</Button>
-							<Button type="button" variant="outline" size="sm" onclick={invertVisibleTaskSelection} disabled={!visibleTasks.length}>
-								反选
-							</Button>
-							{#if isZipRouteEnabled('task-selection')}
-								<Button type="button" variant="outline" size="sm" onclick={downloadSelectedTasksZip} disabled={!selectedDownloadableTasks.length}>
-									<Download class="size-4" />
-									ZIP 下载
-								</Button>
-							{/if}
-							<AlertDialog.Root bind:open={showBulkDeleteDialog}>
-								<AlertDialog.Trigger>
-									<Button type="button" variant="destructive" size="sm" disabled={!selectedTaskIds.length}>
-										<Trash2 class="size-4" />
-										删除
-									</Button>
-								</AlertDialog.Trigger>
-								<AlertDialog.Content>
-									<AlertDialog.Header>
-										<AlertDialog.Title>删除所选任务？</AlertDialog.Title>
-										<AlertDialog.Description>
-											将删除 {selectedTaskIds.length} 个任务及其本地图片文件。此操作不可恢复。
-										</AlertDialog.Description>
-									</AlertDialog.Header>
-									<AlertDialog.Footer>
-										<AlertDialog.Cancel>取消</AlertDialog.Cancel>
-										<AlertDialog.Action onclick={removeSelectedTasks}>确认删除</AlertDialog.Action>
-									</AlertDialog.Footer>
-								</AlertDialog.Content>
-							</AlertDialog.Root>
-							<Button type="button" variant="ghost" size="sm" onclick={clearTaskSelection}>
-								取消
-							</Button>
-						</div>
-					</div>
-				{/if}
-			</div>
-
-			{#if visibleTasks.length === 0}
-				<section class="border-border/80 bg-muted/20 flex min-h-[calc(100vh-24rem)] items-center justify-center rounded-lg border border-dashed p-10 text-center">
-					<div>
-						<div class="bg-background border-border mx-auto mb-4 flex size-12 items-center justify-center rounded-lg border">
-							<ImageIcon class="text-muted-foreground size-5" />
-						</div>
-						<p class="text-lg font-medium">暂无图片</p>
-						<p class="text-muted-foreground mt-1 text-sm">在底部输入提示词开始生成。</p>
-					</div>
-				</section>
-			{:else}
-				<section class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-					{#each visibleTasks as task}
-						{@const previewImages = task.images.length ? getTaskPreviewImages(task) : task.streamPartialImageIds.slice(-4)}
-						{@const isSelected = selectedTaskIds.includes(task.id)}
-						<article data-task-card-id={task.id} class={`border-border bg-card group overflow-hidden rounded-lg border shadow-xs ${isSelected ? 'border-primary ring-ring ring-2' : ''}`}>
-							<div class="bg-muted relative aspect-square w-full overflow-hidden">
-								{#if task.images[0] || task.streamPartialImageIds[0]}
-									<ImageActionContextMenu
-										canDownloadAll={getTaskDownloadableImageCount(task) > 1}
-										canUseAsReference
-										canEditMask={Boolean(task.images[0])}
-										onOpen={() => task.images[0] ? openTaskLightbox(task, 0) : openImagesLightbox(task.streamPartialImageIds, 0, `${task.prompt} partial`, task.id)}
-										onDownload={() => downloadImage(task.images[0] ?? task.streamPartialImageIds[0], task, 0)}
-										onDownloadAll={() => downloadTaskZip(task)}
-										onCopy={() => copyImage(task.images[0] ?? task.streamPartialImageIds[0])}
-										onUseAsReference={() => void addDataUrlAsReference(task.images[0] ?? task.streamPartialImageIds[0], `partial-${task.id}-1.png`)}
-										onEditMask={() => task.images[0] ? void editOutputWithMask(task, 0) : undefined}
-									>
-										<button type="button" class="absolute inset-0 z-[1] block w-full text-left" onclick={() => openTask(task)} aria-label="打开任务详情"></button>
-									</ImageActionContextMenu>
-								{:else}
-									<button type="button" class="absolute inset-0 z-[1] block w-full text-left" onclick={() => openTask(task)} aria-label="打开任务详情"></button>
-								{/if}
-								<div class="absolute top-2 left-2 z-10 flex items-center gap-1.5">
-									<div class={`flex size-7 items-center justify-center rounded-full border shadow-sm backdrop-blur transition ${isSelected ? 'border-primary bg-primary text-primary-foreground' : 'border-white/60 bg-black/45 text-white hover:bg-black/65'}`}>
-										<Checkbox
-											checked={isSelected}
-											class="border-white/70 bg-transparent data-checked:border-primary-foreground data-checked:bg-primary-foreground data-checked:text-primary"
-											aria-label={isSelected ? '取消选择任务' : '选择任务'}
+									<div class="absolute top-2 left-2 z-10 flex items-center gap-1.5">
+										<div
+											class={`flex size-7 items-center justify-center rounded-full border shadow-sm backdrop-blur transition ${isSelected ? 'border-primary bg-primary text-primary-foreground' : 'border-white/60 bg-black/45 text-white hover:bg-black/65'}`}
+										>
+											<Checkbox
+												checked={isSelected}
+												class="border-white/70 bg-transparent data-checked:border-primary-foreground data-checked:bg-primary-foreground data-checked:text-primary"
+												aria-label={isSelected ? '取消选择任务' : '选择任务'}
+												onclick={(event) => {
+													event.stopPropagation();
+													selectionMode = true;
+													toggleTaskSelection(task.id);
+												}}
+											/>
+										</div>
+										<button
+											type="button"
+											class={`flex size-7 items-center justify-center rounded-full border shadow-sm backdrop-blur transition ${task.isFavorite ? 'border-rose-200 bg-rose-50 text-rose-600' : 'border-white/60 bg-black/45 text-white hover:bg-black/65'}`}
 											onclick={(event) => {
 												event.stopPropagation();
-												selectionMode = true;
-												toggleTaskSelection(task.id);
+												toggleTaskFavorite(task.id);
 											}}
+											aria-label={task.isFavorite ? '取消收藏' : '收藏任务'}
+										>
+											<Heart class={`size-4 ${task.isFavorite ? 'fill-current' : ''}`} />
+										</button>
+									</div>
+									{#if task.status === 'running' && !previewImages.length}
+										<div class="absolute inset-0 flex flex-col items-center justify-center gap-3">
+											<LoaderCircle class="text-muted-foreground size-6 animate-spin" />
+											<span class="text-muted-foreground text-sm"
+												>生成中 · {formatDuration(getTaskElapsedMs(task))}</span
+											>
+											<span class="text-muted-foreground text-xs">预计 {formatExpectedImageCount(task.params.n)}</span>
+										</div>
+									{:else if task.status === 'running' && previewImages.length}
+										<img
+											class="h-full w-full object-cover opacity-90 transition-transform duration-300 group-hover:scale-[1.02]"
+											src={previewImages.at(-1)}
+											alt={`${task.prompt} partial`}
 										/>
-									</div>
-									<button
-										type="button"
-										class={`flex size-7 items-center justify-center rounded-full border shadow-sm backdrop-blur transition ${task.isFavorite ? 'border-rose-200 bg-rose-50 text-rose-600' : 'border-white/60 bg-black/45 text-white hover:bg-black/65'}`}
-										onclick={(event) => {
-											event.stopPropagation();
-											toggleTaskFavorite(task.id);
-										}}
-										aria-label={task.isFavorite ? '取消收藏' : '收藏任务'}
+										<div
+											class="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/65 to-transparent p-3 pt-8 text-xs text-white"
+										>
+											生成中 · partial {task.streamPartialImageIds.length} 张
+										</div>
+									{:else if previewImages.length === 1}
+										<img
+											class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+											src={previewImages[0]}
+											alt={task.prompt}
+										/>
+									{:else if previewImages.length > 1}
+										<div class="grid h-full w-full grid-cols-2 gap-1 p-1">
+											{#each previewImages.slice(0, 4) as image, index}
+												<div class="relative overflow-hidden rounded-md">
+													<img class="h-full w-full object-cover" src={image} alt={`${task.prompt} ${index + 1}`} />
+													{#if index === 3 && previewImages.length > 4}
+														<div
+															class="absolute inset-0 flex items-center justify-center bg-black/50 text-sm font-semibold text-white"
+														>
+															+{previewImages.length - 4}
+														</div>
+													{/if}
+												</div>
+											{/each}
+										</div>
+									{:else}
+										<div
+											class="text-muted-foreground absolute inset-0 flex items-center justify-center px-4 text-center text-sm"
+										>
+											{task.error ?? '没有图片'}
+										</div>
+									{/if}
+									<span
+										class={`absolute top-2 right-2 rounded-full border px-2 py-0.5 text-xs ${getStatusClass(task.status)}`}
 									>
-										<Heart class={`size-4 ${task.isFavorite ? 'fill-current' : ''}`} />
-									</button>
-								</div>
-								{#if task.status === 'running' && !previewImages.length}
-									<div class="absolute inset-0 flex flex-col items-center justify-center gap-3">
-										<LoaderCircle class="text-muted-foreground size-6 animate-spin" />
-										<span class="text-muted-foreground text-sm">生成中 · {formatDuration(getTaskElapsedMs(task))}</span>
-										<span class="text-muted-foreground text-xs">预计 {formatExpectedImageCount(task.params.n)}</span>
-									</div>
-								{:else if task.status === 'running' && previewImages.length}
-									<img class="h-full w-full object-cover opacity-90 transition-transform duration-300 group-hover:scale-[1.02]" src={previewImages.at(-1)} alt={`${task.prompt} partial`} />
-									<div class="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/65 to-transparent p-3 pt-8 text-xs text-white">
-										生成中 · partial {task.streamPartialImageIds.length} 张
-									</div>
-								{:else if previewImages.length === 1}
-									<img class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" src={previewImages[0]} alt={task.prompt} />
-								{:else if previewImages.length > 1}
-									<div class="grid h-full w-full grid-cols-2 gap-1 p-1">
-										{#each previewImages.slice(0, 4) as image, index}
-											<div class="relative overflow-hidden rounded-md">
-												<img class="h-full w-full object-cover" src={image} alt={`${task.prompt} ${index + 1}`} />
-												{#if index === 3 && previewImages.length > 4}
-													<div class="absolute inset-0 flex items-center justify-center bg-black/50 text-sm font-semibold text-white">+{previewImages.length - 4}</div>
-												{/if}
-											</div>
-										{/each}
-									</div>
-								{:else}
-									<div class="text-muted-foreground absolute inset-0 flex items-center justify-center px-4 text-center text-sm">
-										{task.error ?? '没有图片'}
-									</div>
-								{/if}
-								<span class={`absolute top-2 right-2 rounded-full border px-2 py-0.5 text-xs ${getStatusClass(task.status)}`}>
-									{getStatusLabel(task.status)}
-								</span>
-								{#if task.status !== 'running'}
-									<span class="absolute right-2 bottom-2 rounded-full bg-black/60 px-2 py-0.5 text-xs text-white">{formatImageCountRatio(task.images.length, task.params.n)}</span>
-								{/if}
-								{#if task.inputImages.length}
-									<span class="absolute bottom-2 left-2 rounded-full bg-black/60 px-2 py-0.5 text-xs text-white">参考图 {task.inputImages.length}</span>
-								{/if}
-							</div>
-							<div class="space-y-3 p-3">
-								<div>
-									<p class="line-clamp-2 text-sm font-medium">{task.prompt}</p>
-									<p class="text-muted-foreground mt-1 text-xs">
-										{task.params.size} · {task.params.quality} · {task.params.output_format} · {formatTaskTime(task.createdAt)}
-									</p>
-									<p class="text-muted-foreground mt-1 text-xs">{getTaskProgressText(task)}</p>
-									{#if task.error && task.status !== 'error'}
-										<p class="mt-1 line-clamp-2 text-xs text-amber-700">{task.error}</p>
+										{getStatusLabel(task.status)}
+									</span>
+									{#if task.status !== 'running'}
+										<span class="absolute right-2 bottom-2 rounded-full bg-black/60 px-2 py-0.5 text-xs text-white"
+											>{formatImageCountRatio(task.images.length, task.params.n)}</span
+										>
+									{/if}
+									{#if task.inputImages.length}
+										<span class="absolute bottom-2 left-2 rounded-full bg-black/60 px-2 py-0.5 text-xs text-white"
+											>参考图 {task.inputImages.length}</span
+										>
 									{/if}
 								</div>
-								<div class="grid grid-cols-4 gap-2">
-									<Button variant="outline" size="xs" onclick={() => openTask(task)} disabled={!task.images.length && !task.streamPartialImageIds.length}>
-										<Eye class="size-3" />
-										查看
-									</Button>
-									<Button variant="outline" size="xs" onclick={() => retryTask(task)}>
-										<RotateCcw class="size-3" />
-										复用
-									</Button>
-									<Button
-										variant="ghost"
-										size="xs"
-										onclick={() => (task.images[0] || task.streamPartialImageIds[0]) && downloadImage(task.images[0] ?? task.streamPartialImageIds[0], task, 0)}
-										disabled={!task.images[0] && !task.streamPartialImageIds[0]}
-									>
-										<Download class="size-3" />
-										下载
-									</Button>
-									<DropdownMenu.Root>
-										<DropdownMenu.Trigger>
-											<Button variant="ghost" size="xs">
-												<MoreHorizontal class="size-3" />
-												更多
-											</Button>
-										</DropdownMenu.Trigger>
-										<DropdownMenu.Content align="end" class="w-44">
-											<DropdownMenu.Item onclick={() => openTask(task)} disabled={!task.images.length && !task.streamPartialImageIds.length}>
-												<Eye class="size-4" />
-												查看详情
-											</DropdownMenu.Item>
-											<DropdownMenu.Item onclick={() => toggleTaskFavorite(task.id)}>
-												<Heart class={`size-4 ${task.isFavorite ? 'fill-current text-rose-600' : ''}`} />
-												{task.isFavorite ? '取消收藏' : '收藏任务'}
-											</DropdownMenu.Item>
-											{#if isZipRouteEnabled('task-card')}
-												<DropdownMenu.Item onclick={() => downloadTaskZip(task)} disabled={!task.images.length && !task.streamPartialImageIds.length}>
-													<Download class="size-4" />
-													下载全部 ZIP
+								<div class="space-y-3 p-3">
+									<div>
+										<p class="line-clamp-2 text-sm font-medium">{task.prompt}</p>
+										<p class="text-muted-foreground mt-1 text-xs">
+											{task.params.size} · {task.params.quality} · {task.params.output_format} · {formatTaskTime(
+												task.createdAt
+											)}
+										</p>
+										<p class="text-muted-foreground mt-1 text-xs">{getTaskProgressText(task)}</p>
+										{#if task.error && task.status !== 'error'}
+											<p class="mt-1 line-clamp-2 text-xs text-amber-700">{task.error}</p>
+										{/if}
+									</div>
+									<div class="grid grid-cols-4 gap-2">
+										<Button
+											variant="outline"
+											size="xs"
+											onclick={() => openTask(task)}
+											disabled={!task.images.length && !task.streamPartialImageIds.length}
+										>
+											<Eye class="size-3" />
+											查看
+										</Button>
+										<Button variant="outline" size="xs" onclick={() => retryTask(task)}>
+											<RotateCcw class="size-3" />
+											复用
+										</Button>
+										<Button
+											variant="ghost"
+											size="xs"
+											onclick={() =>
+												(task.images[0] || task.streamPartialImageIds[0]) &&
+												downloadImage(task.images[0] ?? task.streamPartialImageIds[0], task, 0)}
+											disabled={!task.images[0] && !task.streamPartialImageIds[0]}
+										>
+											<Download class="size-3" />
+											下载
+										</Button>
+										<DropdownMenu.Root>
+											<DropdownMenu.Trigger>
+												<Button variant="ghost" size="xs">
+													<MoreHorizontal class="size-3" />
+													更多
+												</Button>
+											</DropdownMenu.Trigger>
+											<DropdownMenu.Content align="end" class="w-44">
+												<DropdownMenu.Item
+													onclick={() => openTask(task)}
+													disabled={!task.images.length && !task.streamPartialImageIds.length}
+												>
+													<Eye class="size-4" />
+													查看详情
 												</DropdownMenu.Item>
-											{/if}
-											<DropdownMenu.Item onclick={() => void useOutputAsReference(task, 0)} disabled={!task.images[0]}>
-												<ImagePlus class="size-4" />
-												首图作参考
-											</DropdownMenu.Item>
-											<DropdownMenu.Separator />
-											<DropdownMenu.Item variant="destructive" onclick={() => removeTask(task.id)}>
-												<Trash2 class="size-4" />
-												删除任务
-											</DropdownMenu.Item>
-										</DropdownMenu.Content>
-									</DropdownMenu.Root>
+												<DropdownMenu.Item onclick={() => toggleTaskFavorite(task.id)}>
+													<Heart class={`size-4 ${task.isFavorite ? 'fill-current text-rose-600' : ''}`} />
+													{task.isFavorite ? '取消收藏' : '收藏任务'}
+												</DropdownMenu.Item>
+												{#if isZipRouteEnabled('task-card')}
+													<DropdownMenu.Item
+														onclick={() => downloadTaskZip(task)}
+														disabled={!task.images.length && !task.streamPartialImageIds.length}
+													>
+														<Download class="size-4" />
+														下载全部 ZIP
+													</DropdownMenu.Item>
+												{/if}
+												<DropdownMenu.Item
+													onclick={() => void useOutputAsReference(task, 0)}
+													disabled={!task.images[0]}
+												>
+													<ImagePlus class="size-4" />
+													首图作参考
+												</DropdownMenu.Item>
+												<DropdownMenu.Separator />
+												<DropdownMenu.Item variant="destructive" onclick={() => removeTask(task.id)}>
+													<Trash2 class="size-4" />
+													删除任务
+												</DropdownMenu.Item>
+											</DropdownMenu.Content>
+										</DropdownMenu.Root>
+									</div>
 								</div>
-							</div>
-						</article>
-					{/each}
-				</section>
-				{#if hasMoreTasks}
-					<div data-no-drag-select class="flex justify-center pt-5">
-						<Button type="button" variant="outline" onclick={loadMoreTasks}>
-							加载更多
-							<span class="text-muted-foreground text-xs">{visibleTasks.length}/{filteredTasks.length}</span>
-						</Button>
-					</div>
+							</article>
+						{/each}
+					</section>
+					{#if hasMoreTasks}
+						<div data-no-drag-select class="flex justify-center pt-5">
+							<Button type="button" variant="outline" onclick={loadMoreTasks}>
+								加载更多
+								<span class="text-muted-foreground text-xs">{visibleTasks.length}/{filteredTasks.length}</span>
+							</Button>
+						</div>
+					{/if}
 				{/if}
-			{/if}
-			{#if selectionBox}
-				{@const rect = normalizeSelectionRect(selectionBox)}
-				<div
-					class="pointer-events-none fixed z-50 border border-primary bg-primary/10"
-					style={`left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;`}
-				></div>
-			{/if}
-		</div>
+				{#if selectionBox}
+					{@const rect = normalizeSelectionRect(selectionBox)}
+					<div
+						class="pointer-events-none fixed z-50 border border-primary bg-primary/10"
+						style={`left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;`}
+					></div>
+				{/if}
+			</div>
 		{:else}
-			<div class="mx-auto grid h-full min-h-0 w-full max-w-7xl grid-cols-[260px_minmax(0,1fr)_320px] gap-4 py-5 max-xl:grid-cols-[220px_minmax(0,1fr)] max-lg:grid-cols-1">
-				<aside data-no-drag-select class="border-border bg-card min-h-0 overflow-hidden rounded-lg border shadow-xs max-lg:hidden">
+			<div
+				class="mx-auto grid h-full min-h-0 w-full max-w-7xl grid-cols-[260px_minmax(0,1fr)_320px] gap-4 py-5 max-xl:grid-cols-[220px_minmax(0,1fr)] max-lg:grid-cols-1"
+			>
+				<aside
+					data-no-drag-select
+					class="border-border bg-card min-h-0 overflow-hidden rounded-lg border shadow-xs max-lg:hidden"
+				>
 					<div class="border-border flex items-center justify-between border-b p-3">
 						<div>
 							<h2 class="text-sm font-semibold">Agent 会话</h2>
 							<p class="text-muted-foreground text-xs">{agentConversations.length} 个会话</p>
 						</div>
-						<Button type="button" variant="outline" size="icon-sm" onclick={createNewAgentConversation} aria-label="新建会话">
+						<Button
+							type="button"
+							variant="outline"
+							size="icon-sm"
+							onclick={createNewAgentConversation}
+							aria-label="新建会话"
+						>
 							<MessagesSquare class="size-4" />
 						</Button>
 					</div>
@@ -1965,33 +2147,52 @@
 					<header data-no-drag-select class="border-border flex items-center justify-between border-b px-4 py-3">
 						<div class="min-w-0">
 							<h2 class="truncate text-sm font-semibold">{activeAgentConversation?.title ?? 'Agent'}</h2>
-							<p class="text-muted-foreground text-xs">{activeProfile.name} · {activeProfile.model} · 最大工具轮数 {settings.agentMaxToolRounds}</p>
+							<p class="text-muted-foreground text-xs">
+								{activeProfile.name} · {activeProfile.model} · 最大工具轮数 {settings.agentMaxToolRounds}
+							</p>
 						</div>
 						<div class="flex items-center gap-2">
 							<Button type="button" variant="outline" size="sm" onclick={createNewAgentConversation}>新会话</Button>
-							<Button type="button" variant="ghost" size="icon-sm" disabled={!activeAgentConversation} onclick={() => activeAgentConversation && removeAgentConversation(activeAgentConversation.id)} aria-label="删除会话">
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon-sm"
+								disabled={!activeAgentConversation}
+								onclick={() => activeAgentConversation && removeAgentConversation(activeAgentConversation.id)}
+								aria-label="删除会话"
+							>
 								<Trash2 class="size-4" />
 							</Button>
 						</div>
 					</header>
 					<div bind:this={agentMessagesViewport} class="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
 						{#if !activeAgentConversation?.messages.length}
-							<div class="border-border bg-muted/20 flex h-full min-h-96 items-center justify-center rounded-lg border border-dashed p-8 text-center">
+							<div
+								class="border-border bg-muted/20 flex h-full min-h-96 items-center justify-center rounded-lg border border-dashed p-8 text-center"
+							>
 								<div>
 									<MessagesSquare class="text-muted-foreground mx-auto mb-3 size-8" />
 									<p class="font-medium">开始一个 Agent 生成会话</p>
-									<p class="text-muted-foreground mt-1 text-sm">Agent 通过 Responses API 调用图片工具，输出会沉淀为 Gallery 任务。</p>
+									<p class="text-muted-foreground mt-1 text-sm">
+										Agent 通过 Responses API 调用图片工具，输出会沉淀为 Gallery 任务。
+									</p>
 								</div>
 							</div>
 						{:else}
 							{#each activeAgentConversation.messages as message}
 								{@const round = activeAgentConversation.rounds.find((item) => item.id === message.roundId)}
 								<div class={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-									<div class={`max-w-[78%] rounded-lg border px-3 py-2 text-sm leading-relaxed ${message.role === 'user' ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/35'}`}>
+									<div
+										class={`max-w-[78%] rounded-lg border px-3 py-2 text-sm leading-relaxed ${message.role === 'user' ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/35'}`}
+									>
 										<div class="flex items-start justify-between gap-3">
-											<p class="whitespace-pre-wrap">{message.content || (message.role === 'assistant' ? '...' : '')}</p>
+											<p class="whitespace-pre-wrap">
+												{message.content || (message.role === 'assistant' ? '...' : '')}
+											</p>
 											{#if message.role === 'assistant' && round}
-												<Badge variant="outline" class={`shrink-0 ${getAgentRoundClass(round.status)}`}>{getAgentRoundLabel(round.status)}</Badge>
+												<Badge variant="outline" class={`shrink-0 ${getAgentRoundClass(round.status)}`}
+													>{getAgentRoundLabel(round.status)}</Badge
+												>
 											{/if}
 										</div>
 										{#if message.role === 'assistant' && round}
@@ -2011,22 +2212,54 @@
 												<div class="mt-2 flex flex-wrap gap-1">
 													{#each round.toolCalls as toolCall}
 														<Badge variant="secondary" class="max-w-56 truncate">
-															{toolCall.type}{toolCall.status ? ` · ${toolCall.status}` : ''}{toolCall.title ? ` · ${toolCall.title}` : ''}
+															{toolCall.type}{toolCall.status ? ` · ${toolCall.status}` : ''}{toolCall.title
+																? ` · ${toolCall.title}`
+																: ''}
 														</Badge>
 													{/each}
 												</div>
 											{/if}
 											<div class="mt-2 flex flex-wrap gap-2">
 												{#if round.status === 'running'}
-													<Button type="button" variant="outline" size="sm" class="h-7" onclick={() => stopAgentRound(round.id)}>停止</Button>
+													<Button
+														type="button"
+														variant="outline"
+														size="sm"
+														class="h-7"
+														onclick={() => stopAgentRound(round.id)}>停止</Button
+													>
 												{:else if round.status === 'error' || round.status === 'canceled'}
-													<Button type="button" variant="outline" size="sm" class="h-7" onclick={() => retryAgentRound(round.id)}>重试</Button>
+													<Button
+														type="button"
+														variant="outline"
+														size="sm"
+														class="h-7"
+														onclick={() => retryAgentRound(round.id)}>重试</Button
+													>
 												{:else}
-													<Button type="button" variant="outline" size="sm" class="h-7" onclick={() => continueAgentRound(round.id)}>继续</Button>
-													<Button type="button" variant="ghost" size="sm" class="h-7" onclick={() => retryAgentRound(round.id)}>再跑一次</Button>
+													<Button
+														type="button"
+														variant="outline"
+														size="sm"
+														class="h-7"
+														onclick={() => continueAgentRound(round.id)}>继续</Button
+													>
+													<Button
+														type="button"
+														variant="ghost"
+														size="sm"
+														class="h-7"
+														onclick={() => retryAgentRound(round.id)}>再跑一次</Button
+													>
 												{/if}
 												{#if isZipRouteEnabled('agent-round-all') && getAgentRoundDownloadableTaskCount(round.id) > 0}
-													<Button type="button" variant="ghost" size="sm" class="h-7" onclick={() => downloadAgentRoundZip(round.id)}>
+													<Button
+														type="button"
+														variant="ghost"
+														size="sm"
+														class="h-7"
+														onclick={() => downloadAgentRoundZip(round.id)}
+													>
 														<Download class="size-4" />
 														下载本轮
 													</Button>
@@ -2038,13 +2271,27 @@
 												{#each message.outputTaskIds as taskId}
 													{@const task = tasks.find((item) => item.id === taskId)}
 													{#if task}
-														<button type="button" class="overflow-hidden rounded-md border bg-background text-left" onclick={() => openTask(task)}>
+														<button
+															type="button"
+															class="overflow-hidden rounded-md border bg-background text-left"
+															onclick={() => openTask(task)}
+														>
 															{#if task.images[0] || task.streamPartialImageIds[0]}
-																<img class="aspect-square w-full object-cover" src={task.images[0] ?? task.streamPartialImageIds.at(-1)} alt={task.prompt} />
+																<img
+																	class="aspect-square w-full object-cover"
+																	src={task.images[0] ?? task.streamPartialImageIds.at(-1)}
+																	alt={task.prompt}
+																/>
 															{:else}
-																<div class="text-muted-foreground flex aspect-square items-center justify-center text-xs">{getStatusLabel(task.status)}</div>
+																<div
+																	class="text-muted-foreground flex aspect-square items-center justify-center text-xs"
+																>
+																	{getStatusLabel(task.status)}
+																</div>
 															{/if}
-															<div class="p-2 text-xs text-foreground">{formatImageCountRatio(task.images.length, task.params.n)}</div>
+															<div class="p-2 text-xs text-foreground">
+																{formatImageCountRatio(task.images.length, task.params.n)}
+															</div>
 														</button>
 													{/if}
 												{/each}
@@ -2057,22 +2304,37 @@
 					</div>
 				</section>
 
-				<aside data-no-drag-select class="border-border bg-card min-h-0 overflow-hidden rounded-lg border shadow-xs max-xl:hidden">
+				<aside
+					data-no-drag-select
+					class="border-border bg-card min-h-0 overflow-hidden rounded-lg border shadow-xs max-xl:hidden"
+				>
 					<div class="border-border border-b p-3">
 						<h2 class="text-sm font-semibold">Agent 图片</h2>
 						<p class="text-muted-foreground text-xs">当前会话输出任务</p>
 					</div>
 					<div class="grid max-h-full gap-2 overflow-y-auto p-3">
 						{#each activeAgentTasks as task}
-							<button type="button" class="overflow-hidden rounded-lg border bg-muted/15 text-left" onclick={() => openTask(task)}>
+							<button
+								type="button"
+								class="overflow-hidden rounded-lg border bg-muted/15 text-left"
+								onclick={() => openTask(task)}
+							>
 								{#if task.images[0] || task.streamPartialImageIds[0]}
-									<img class="aspect-video w-full object-cover" src={task.images[0] ?? task.streamPartialImageIds.at(-1)} alt={task.prompt} />
+									<img
+										class="aspect-video w-full object-cover"
+										src={task.images[0] ?? task.streamPartialImageIds.at(-1)}
+										alt={task.prompt}
+									/>
 								{:else}
-									<div class="text-muted-foreground flex aspect-video items-center justify-center text-xs">{getStatusLabel(task.status)}</div>
+									<div class="text-muted-foreground flex aspect-video items-center justify-center text-xs">
+										{getStatusLabel(task.status)}
+									</div>
 								{/if}
 								<div class="p-2">
 									<p class="line-clamp-2 text-xs font-medium">{task.prompt}</p>
-									<p class="text-muted-foreground mt-1 text-xs">{formatImageCountRatio(task.images.length, task.params.n)} · {getStatusLabel(task.status)}</p>
+									<p class="text-muted-foreground mt-1 text-xs">
+										{formatImageCountRatio(task.images.length, task.params.n)} · {getStatusLabel(task.status)}
+									</p>
 								</div>
 							</button>
 						{/each}
@@ -2111,7 +2373,12 @@
 						<SlidersHorizontal class="size-3.5" />
 						参数
 					</div>
-					<Button type="button" variant="outline" class="justify-start overflow-hidden px-3 text-xs" onclick={() => (showSizePicker = true)}>
+					<Button
+						type="button"
+						variant="outline"
+						class="justify-start overflow-hidden px-3 text-xs"
+						onclick={() => (showSizePicker = true)}
+					>
 						<span class="truncate">{params.size}</span>
 					</Button>
 					<Select bind:value={params.quality} name="quality" class="h-9 rounded-lg text-xs" aria-label="质量">
@@ -2119,7 +2386,12 @@
 							<option value={option}>质量 {option}</option>
 						{/each}
 					</Select>
-					<Select bind:value={params.output_format} name="outputFormat" class="h-9 rounded-lg text-xs" aria-label="格式">
+					<Select
+						bind:value={params.output_format}
+						name="outputFormat"
+						class="h-9 rounded-lg text-xs"
+						aria-label="格式"
+					>
 						{#each formatOptions as option}
 							<option value={option}>格式 {option}</option>
 						{/each}
@@ -2158,7 +2430,11 @@
 						value={appMode === 'agent' ? agentPrompt : prompt}
 						name="prompt"
 						class="max-h-36 min-h-20 flex-1 resize-none rounded-lg border-0 bg-muted/40 p-3 shadow-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0"
-						placeholder={appMode === 'agent' ? '给 Agent 发送图片生成或修改需求...' : inputImages.length ? '描述如何编辑或参考这些图片...' : '描述你想生成的图片...'}
+						placeholder={appMode === 'agent'
+							? '给 Agent 发送图片生成或修改需求...'
+							: inputImages.length
+								? '描述如何编辑或参考这些图片...'
+								: '描述你想生成的图片...'}
 						oninput={(event) => {
 							if (appMode === 'agent') agentPrompt = (event.currentTarget as HTMLTextAreaElement).value;
 							else prompt = (event.currentTarget as HTMLTextAreaElement).value;
@@ -2166,13 +2442,32 @@
 						onkeydown={handlePromptKeydown}
 					/>
 					<div class="flex w-11 flex-col gap-2">
-						<Button type="button" variant="outline" size="icon" onclick={openFilePicker} disabled={inputImages.length >= MAX_INPUT_IMAGES} aria-label="添加参考图">
+						<Button
+							type="button"
+							variant="outline"
+							size="icon"
+							onclick={openFilePicker}
+							disabled={inputImages.length >= MAX_INPUT_IMAGES}
+							aria-label="添加参考图"
+						>
 							<ImagePlus class="size-4" />
 						</Button>
-						<Button type="button" variant="ghost" size="icon" onclick={clearPrompt} disabled={appMode === 'agent' ? !agentPrompt.trim() : !prompt.trim()} aria-label="清空提示词">
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							onclick={clearPrompt}
+							disabled={appMode === 'agent' ? !agentPrompt.trim() : !prompt.trim()}
+							aria-label="清空提示词"
+						>
 							<span class="text-base leading-none">×</span>
 						</Button>
-						<Button type="submit" size="icon" disabled={appMode === 'agent' ? !canSubmitAgent : !canSubmit} aria-label={activeProfile.apiKey ? (appMode === 'agent' ? '发送 Agent 消息' : '生成图像') : '配置 API'}>
+						<Button
+							type="submit"
+							size="icon"
+							disabled={appMode === 'agent' ? !canSubmitAgent : !canSubmit}
+							aria-label={activeProfile.apiKey ? (appMode === 'agent' ? '发送 Agent 消息' : '生成图像') : '配置 API'}
+						>
 							<SendHorizontal class="size-4" />
 						</Button>
 					</div>
@@ -2186,15 +2481,17 @@
 								? agentBlockReason
 								: profileBlockReason
 									? profileBlockReason
-								: appMode === 'agent'
-									? `Agent · 最大工具轮数 ${settings.agentMaxToolRounds}${settings.agentWebSearch ? ' · Web Search' : ''} · ${activeProfile.name} · ${activeProfile.model} · ${activeProfile.timeoutSecs}s${activeProfile.responseFormatB64Json ? ' · b64_json' : ''}`
-									: `${nextGalleryProfileOverrideId ? '临时复用 · ' : ''}${effectiveGalleryProfile.name} · ${effectiveGalleryProfile.model} · ${effectiveGalleryProfile.timeoutSecs}s${effectiveGalleryProfile.responseFormatB64Json ? ' · b64_json' : ''}`}
-						</p>
+									: appMode === 'agent'
+										? `Agent · 最大工具轮数 ${settings.agentMaxToolRounds}${settings.agentWebSearch ? ' · Web Search' : ''} · ${activeProfile.name} · ${activeProfile.model} · ${activeProfile.timeoutSecs}s${activeProfile.responseFormatB64Json ? ' · b64_json' : ''}`
+										: `${nextGalleryProfileOverrideId ? '临时复用 · ' : ''}${effectiveGalleryProfile.name} · ${effectiveGalleryProfile.model} · ${effectiveGalleryProfile.timeoutSecs}s${effectiveGalleryProfile.responseFormatB64Json ? ' · b64_json' : ''}`}
+					</p>
 					<p class="text-muted-foreground hidden text-xs sm:block">可粘贴或拖拽图片到窗口</p>
 				</div>
 
 				{#if error}
-					<div class="border-destructive/30 bg-destructive/10 text-destructive mt-3 rounded-md border px-3 py-2 text-sm">
+					<div
+						class="border-destructive/30 bg-destructive/10 text-destructive mt-3 rounded-md border px-3 py-2 text-sm"
+					>
 						{error}
 					</div>
 				{/if}
@@ -2202,7 +2499,15 @@
 		</div>
 	</div>
 
-	<input bind:this={fileInput} name="referenceImages" type="file" accept="image/*" multiple class="hidden" onchange={handleFileSelection} />
+	<input
+		bind:this={fileInput}
+		name="referenceImages"
+		type="file"
+		accept="image/*"
+		multiple
+		class="hidden"
+		onchange={handleFileSelection}
+	/>
 
 	<GallerySettingsModal
 		bind:open={showSettings}

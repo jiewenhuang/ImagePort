@@ -1,6 +1,10 @@
 import Database from '@tauri-apps/plugin-sql';
 import { normalizeAgentConversations, type AgentConversation } from '$lib/domain/agent';
-import { normalizeTasks, shouldPersistTaskSnapshot, type TaskSnapshotPersistenceOptions } from '$lib/domain/task-storage';
+import {
+	normalizeTasks,
+	shouldPersistTaskSnapshot,
+	type TaskSnapshotPersistenceOptions
+} from '$lib/domain/task-storage';
 import type { TaskRecord } from '$lib/domain/types';
 import {
 	listStoredImages,
@@ -106,7 +110,9 @@ async function initGalleryDb(): Promise<Database> {
 			payload TEXT NOT NULL
 		)
 	`);
-	await db.execute('CREATE INDEX IF NOT EXISTS idx_agent_conversations_updated_at ON agent_conversations(updated_at DESC)');
+	await db.execute(
+		'CREATE INDEX IF NOT EXISTS idx_agent_conversations_updated_at ON agent_conversations(updated_at DESC)'
+	);
 	return db;
 }
 
@@ -118,21 +124,20 @@ export async function loadStoredTasks(): Promise<TaskRecord[] | null> {
 	return normalizeTasks(payloads);
 }
 
-export async function saveStoredTasks(tasks: TaskRecord[], options: TaskSnapshotPersistenceOptions = {}): Promise<boolean> {
+export async function saveStoredTasks(
+	tasks: TaskRecord[],
+	options: TaskSnapshotPersistenceOptions = {}
+): Promise<boolean> {
 	const normalizedTasks = normalizeTasks(tasks);
 	if (!shouldPersistTaskSnapshot(normalizedTasks, options)) return false;
-	saveQueue = saveQueue
-		.catch(() => true)
-		.then(() => saveStoredTasksNow(normalizedTasks));
+	saveQueue = saveQueue.catch(() => true).then(() => saveStoredTasksNow(normalizedTasks));
 	return saveQueue;
 }
 
 export async function saveStoredTask(task: TaskRecord): Promise<boolean> {
 	const normalizedTask = normalizeTasks([task])[0];
 	if (!normalizedTask) return false;
-	saveQueue = saveQueue
-		.catch(() => true)
-		.then(() => saveStoredTaskNow(normalizedTask));
+	saveQueue = saveQueue.catch(() => true).then(() => saveStoredTaskNow(normalizedTask));
 	return saveQueue;
 }
 
@@ -146,8 +151,16 @@ async function saveStoredTasksNow(normalizedTasks: TaskRecord[]): Promise<boolea
 		}))
 	);
 	await runSqlBatchWithTransaction(db, [
-		...rows.map(({ task, payload }) => (executor: GalleryDbExecutor) => upsertTaskRow(executor, task, payload)),
-		(executor) => deleteTasksOutsideSnapshot(executor, normalizedTasks.map((task) => task.id))
+		...rows.map(
+			({ task, payload }) =>
+				(executor: GalleryDbExecutor) =>
+					upsertTaskRow(executor, task, payload)
+		),
+		(executor) =>
+			deleteTasksOutsideSnapshot(
+				executor,
+				normalizedTasks.map((task) => task.id)
+			)
 	]);
 	return true;
 }
@@ -170,15 +183,15 @@ export async function clearStoredTasks(): Promise<boolean> {
 export async function loadStoredAgentConversations(): Promise<AgentConversation[] | null> {
 	const db = await getGalleryDb();
 	if (!db) return null;
-	const rows = await db.select<AgentConversationRow[]>('SELECT id, payload FROM agent_conversations ORDER BY updated_at DESC');
+	const rows = await db.select<AgentConversationRow[]>(
+		'SELECT id, payload FROM agent_conversations ORDER BY updated_at DESC'
+	);
 	return normalizeAgentConversations(rows.map((row) => parseTaskPayload(row.payload)));
 }
 
 export async function saveStoredAgentConversations(conversations: AgentConversation[]): Promise<boolean> {
 	const normalized = normalizeAgentConversations(conversations);
-	agentSaveQueue = agentSaveQueue
-		.catch(() => true)
-		.then(() => saveStoredAgentConversationsNow(normalized));
+	agentSaveQueue = agentSaveQueue.catch(() => true).then(() => saveStoredAgentConversationsNow(normalized));
 	return agentSaveQueue;
 }
 
@@ -186,19 +199,24 @@ async function saveStoredAgentConversationsNow(conversations: AgentConversation[
 	const db = await getGalleryDb();
 	if (!db) return false;
 	await runSqlBatchWithTransaction(db, [
-		...conversations.map((conversation) => (executor: GalleryDbExecutor) =>
-			executor.execute(
-				`INSERT INTO agent_conversations (id, title, created_at, updated_at, payload)
+		...conversations.map(
+			(conversation) => (executor: GalleryDbExecutor) =>
+				executor.execute(
+					`INSERT INTO agent_conversations (id, title, created_at, updated_at, payload)
 				 VALUES ($1, $2, $3, $4, $5)
 				 ON CONFLICT(id) DO UPDATE SET
 					title = excluded.title,
 					created_at = excluded.created_at,
 					updated_at = excluded.updated_at,
 					payload = excluded.payload`,
-				createAgentConversationRow(conversation)
-			)
+					createAgentConversationRow(conversation)
+				)
 		),
-		(executor) => deleteAgentConversationsOutsideSnapshot(executor, conversations.map((conversation) => conversation.id))
+		(executor) =>
+			deleteAgentConversationsOutsideSnapshot(
+				executor,
+				conversations.map((conversation) => conversation.id)
+			)
 	]);
 	return true;
 }
@@ -296,7 +314,9 @@ export async function cleanupUnreferencedTaskImageFiles(
 	}
 
 	const storedFiles = await index.list();
-	const unreferencedFiles = storedFiles.filter((file) => file.mime !== 'inline/data-url' && !referencedPaths.has(file.path));
+	const unreferencedFiles = storedFiles.filter(
+		(file) => file.mime !== 'inline/data-url' && !referencedPaths.has(file.path)
+	);
 	const results = await Promise.all(unreferencedFiles.map((file) => index.remove(file)));
 	const removedCount = results.filter(Boolean).length;
 	return {
@@ -306,15 +326,7 @@ export async function cleanupUnreferencedTaskImageFiles(
 }
 
 export function serializeTaskRow(task: TaskRecord, payload: unknown = task): unknown[] {
-	return [
-		task.id,
-		task.prompt,
-		task.status,
-		task.createdAt,
-		task.finishedAt,
-		JSON.stringify(payload),
-		Date.now()
-	];
+	return [task.id, task.prompt, task.status, task.createdAt, task.finishedAt, JSON.stringify(payload), Date.now()];
 }
 
 export function parseTaskPayload(payload: string): unknown {
@@ -351,7 +363,9 @@ export async function createFileBackedTaskPayload(
 	const outputRefs = await Promise.all(
 		task.images.map((image, index) => saveTaskImage(files, 'outputs', `${task.id}-${index + 1}`, image))
 	);
-	const thumbnailSources = task.thumbnailImages?.length ? task.thumbnailImages : await Promise.all(task.images.map(createThumbnail));
+	const thumbnailSources = task.thumbnailImages?.length
+		? task.thumbnailImages
+		: await Promise.all(task.images.map(createThumbnail));
 	const thumbnailRefs = await Promise.all(
 		thumbnailSources.map((image, index) => saveTaskImage(files, 'thumbs', `${task.id}-${index + 1}`, image))
 	);
@@ -423,7 +437,9 @@ export async function hydrateFileBackedTaskPayload(
 		...payload.task,
 		images: images.filter((image): image is string => typeof image === 'string' && image.length > 0),
 		thumbnailImages: thumbnailImages.filter((image): image is string => typeof image === 'string' && image.length > 0),
-		streamPartialImageIds: partialImages.filter((image): image is string => typeof image === 'string' && image.length > 0),
+		streamPartialImageIds: partialImages.filter(
+			(image): image is string => typeof image === 'string' && image.length > 0
+		),
 		inputImages: inputImages.filter((image) => image.dataUrl),
 		mask: mask?.dataUrl ? mask : null
 	};

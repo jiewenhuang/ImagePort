@@ -41,20 +41,31 @@ describe('gallery task helpers', () => {
 
 	test('filters favorite tasks independently of status and search query', () => {
 		const tasks = [
-			task({ id: 'a', prompt: 'blue ceramic cup', status: 'done', isFavorite: true, favoriteCollectionIds: ['favorites-default'] }),
+			task({
+				id: 'a',
+				prompt: 'blue ceramic cup',
+				status: 'done',
+				isFavorite: true,
+				favoriteCollectionIds: ['favorites-default']
+			}),
 			task({ id: 'b', prompt: 'blue desk lamp', status: 'error', isFavorite: true, favoriteCollectionIds: ['work'] }),
 			task({ id: 'c', prompt: 'blue wall', status: 'done', isFavorite: false })
 		];
 
-		expect(filterGalleryTasks(tasks, { status: 'all', query: 'blue', favoriteOnly: true }).map((item) => item.id)).toEqual([
-			'a',
-			'b'
-		]);
-		expect(filterGalleryTasks(tasks, { status: 'done', query: 'blue', favoriteOnly: true }).map((item) => item.id)).toEqual([
-			'a'
-		]);
-		expect(filterGalleryTasks(tasks, { status: 'all', query: 'blue', favoriteCollectionId: 'work' }).map((item) => item.id)).toEqual(['b']);
-		expect(filterGalleryTasks(tasks, { status: 'all', query: 'blue', favoriteCollectionId: 'favorites-all' }).map((item) => item.id)).toEqual(['a', 'b']);
+		expect(
+			filterGalleryTasks(tasks, { status: 'all', query: 'blue', favoriteOnly: true }).map((item) => item.id)
+		).toEqual(['a', 'b']);
+		expect(
+			filterGalleryTasks(tasks, { status: 'done', query: 'blue', favoriteOnly: true }).map((item) => item.id)
+		).toEqual(['a']);
+		expect(
+			filterGalleryTasks(tasks, { status: 'all', query: 'blue', favoriteCollectionId: 'work' }).map((item) => item.id)
+		).toEqual(['b']);
+		expect(
+			filterGalleryTasks(tasks, { status: 'all', query: 'blue', favoriteCollectionId: 'favorites-all' }).map(
+				(item) => item.id
+			)
+		).toEqual(['a', 'b']);
 	});
 
 	test('returns a limited page of filtered tasks', () => {
@@ -68,11 +79,13 @@ describe('gallery task helpers', () => {
 	});
 
 	test('prefers thumbnails for card previews and falls back to full images', () => {
-		expect(getTaskPreviewImages(task({ images: ['full-1', 'full-2'], thumbnailImages: ['thumb-1', 'thumb-2'] }))).toEqual([
-			'thumb-1',
-			'thumb-2'
+		expect(
+			getTaskPreviewImages(task({ images: ['full-1', 'full-2'], thumbnailImages: ['thumb-1', 'thumb-2'] }))
+		).toEqual(['thumb-1', 'thumb-2']);
+		expect(getTaskPreviewImages(task({ images: ['full-1', 'full-2'], thumbnailImages: [] }))).toEqual([
+			'full-1',
+			'full-2'
 		]);
-		expect(getTaskPreviewImages(task({ images: ['full-1', 'full-2'], thumbnailImages: [] }))).toEqual(['full-1', 'full-2']);
 	});
 
 	test('prunes selected task ids that are no longer visible', () => {

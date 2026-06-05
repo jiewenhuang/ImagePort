@@ -19,6 +19,7 @@
 		zoomLightboxTransform,
 		type LightboxTransform
 	} from '$lib/domain/lightbox';
+	import ImageActionContextMenu from './ImageActionContextMenu.svelte';
 
 	let {
 		open = $bindable(false),
@@ -79,10 +80,22 @@
 		transform = resetLightboxTransform();
 	}
 
+	function handlePreviousClick(event: MouseEvent) {
+		event.preventDefault();
+		event.stopPropagation();
+		previous();
+	}
+
 	function next() {
 		if (images.length <= 1) return;
 		index = getWrappedImageIndex(index, 1, images.length);
 		transform = resetLightboxTransform();
+	}
+
+	function handleNextClick(event: MouseEvent) {
+		event.preventDefault();
+		event.stopPropagation();
+		next();
 	}
 
 	function zoomIn() {
@@ -127,6 +140,7 @@
 	}
 
 	function startDrag(event: PointerEvent) {
+		if (event.button !== 0) return;
 		if (transform.scale <= 1) return;
 		dragPointerId = event.pointerId;
 		lastPointer = { x: event.clientX, y: event.clientY };
@@ -166,25 +180,57 @@
 {#if open && currentImage}
 	<div class="fixed inset-0 z-[80] bg-black text-white">
 		<div class="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.08),transparent_42%)]"></div>
-		<header class="absolute top-0 right-0 left-0 z-10 flex h-14 items-center justify-between border-b border-white/10 bg-black/65 px-4 backdrop-blur">
+		<header
+			class="absolute top-0 right-0 left-0 z-10 flex h-14 items-center justify-between border-b border-white/10 bg-black/65 px-4 backdrop-blur"
+		>
 			<div class="min-w-0">
 				<p class="truncate text-sm font-medium">{title}</p>
 				<p class="text-xs text-white/60">{index + 1}/{images.length} · {Math.round(transform.scale * 100)}%</p>
 			</div>
 			<div class="flex items-center gap-1.5">
-				<Button variant="ghost" size="icon-sm" class="text-white hover:bg-white/10 hover:text-white" onclick={zoomOut} aria-label="缩小">
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					class="text-white hover:bg-white/10 hover:text-white"
+					onclick={zoomOut}
+					aria-label="缩小"
+				>
 					<Minus class="size-4" />
 				</Button>
-				<Button variant="ghost" size="icon-sm" class="text-white hover:bg-white/10 hover:text-white" onclick={resetZoom} aria-label="重置缩放">
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					class="text-white hover:bg-white/10 hover:text-white"
+					onclick={resetZoom}
+					aria-label="重置缩放"
+				>
 					<RotateCcw class="size-4" />
 				</Button>
-				<Button variant="ghost" size="icon-sm" class="text-white hover:bg-white/10 hover:text-white" onclick={zoomIn} aria-label="放大">
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					class="text-white hover:bg-white/10 hover:text-white"
+					onclick={zoomIn}
+					aria-label="放大"
+				>
 					<Plus class="size-4" />
 				</Button>
-				<Button variant="ghost" size="icon-sm" class="text-white hover:bg-white/10 hover:text-white" onclick={copyCurrent} aria-label="复制图片">
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					class="text-white hover:bg-white/10 hover:text-white"
+					onclick={copyCurrent}
+					aria-label="复制图片"
+				>
 					<Clipboard class="size-4" />
 				</Button>
-				<Button variant="ghost" size="icon-sm" class="text-white hover:bg-white/10 hover:text-white" onclick={downloadCurrent} aria-label="保存图片">
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					class="text-white hover:bg-white/10 hover:text-white"
+					onclick={downloadCurrent}
+					aria-label="保存图片"
+				>
 					<Download class="size-4" />
 				</Button>
 				{#if onDownloadAll && images.length > 1}
@@ -193,7 +239,13 @@
 						全部
 					</Button>
 				{/if}
-				<Button variant="ghost" size="icon-sm" class="text-white hover:bg-white/10 hover:text-white" onclick={close} aria-label="关闭">
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					class="text-white hover:bg-white/10 hover:text-white"
+					onclick={close}
+					aria-label="关闭"
+				>
 					<X class="size-4" />
 				</Button>
 			</div>
@@ -209,40 +261,58 @@
 			onpointerup={stopDrag}
 			onpointercancel={stopDrag}
 		>
-			<img
-				class="max-h-full max-w-full select-none object-contain shadow-2xl"
-				src={currentImage}
-				alt={title}
-				draggable="false"
-				style={`transform: translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale}); transition: ${dragPointerId == null ? 'transform 120ms ease' : 'none'};`}
-				ondblclick={transform.scale > 1 ? resetZoom : zoomIn}
-			/>
+			<ImageActionContextMenu
+				showOpen={false}
+				canDownloadAll={Boolean(onDownloadAll) && images.length > 1}
+				{canUseAsReference}
+				{canEditMask}
+				onDownload={downloadCurrent}
+				onDownloadAll={downloadAll}
+				onCopy={copyCurrent}
+				onUseAsReference={() => onUseAsReference?.(index)}
+				onEditMask={() => onEditMask?.(index)}
+			>
+				<img
+					class="max-h-full max-w-full select-none object-contain shadow-2xl"
+					src={currentImage}
+					alt={title}
+					draggable="false"
+					style={`transform: translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale}); transition: ${dragPointerId == null ? 'transform 120ms ease' : 'none'};`}
+					ondblclick={transform.scale > 1 ? resetZoom : zoomIn}
+				/>
+			</ImageActionContextMenu>
 		</div>
 
 		{#if images.length > 1}
-			<Button
-				type="button"
-				variant="secondary"
-				size="icon"
-				class="absolute top-1/2 left-4 z-10 size-11 -translate-y-1/2 rounded-full bg-white/12 text-white shadow-lg backdrop-blur hover:bg-white/20 hover:text-white"
-				onclick={previous}
-				aria-label="上一张"
-			>
-				<ChevronLeft class="size-6" />
-			</Button>
-			<Button
-				type="button"
-				variant="secondary"
-				size="icon"
-				class="absolute top-1/2 right-4 z-10 size-11 -translate-y-1/2 rounded-full bg-white/12 text-white shadow-lg backdrop-blur hover:bg-white/20 hover:text-white"
-				onclick={next}
-				aria-label="下一张"
-			>
-				<ChevronRight class="size-6" />
-			</Button>
+			<div class="pointer-events-none absolute inset-y-0 left-4 z-10 flex items-center">
+				<Button
+					type="button"
+					variant="secondary"
+					size="icon"
+					class="pointer-events-auto size-11 rounded-full bg-white/12 text-white shadow-lg backdrop-blur hover:bg-white/20 hover:text-white active:not-aria-[haspopup]:translate-y-0"
+					onclick={handlePreviousClick}
+					aria-label="上一张"
+				>
+					<ChevronLeft class="size-6" />
+				</Button>
+			</div>
+			<div class="pointer-events-none absolute inset-y-0 right-4 z-10 flex items-center">
+				<Button
+					type="button"
+					variant="secondary"
+					size="icon"
+					class="pointer-events-auto size-11 rounded-full bg-white/12 text-white shadow-lg backdrop-blur hover:bg-white/20 hover:text-white active:not-aria-[haspopup]:translate-y-0"
+					onclick={handleNextClick}
+					aria-label="下一张"
+				>
+					<ChevronRight class="size-6" />
+				</Button>
+			</div>
 		{/if}
 
-		<footer class="absolute right-0 bottom-0 left-0 z-10 flex items-center justify-between gap-3 border-t border-white/10 bg-black/65 px-4 py-3 backdrop-blur">
+		<footer
+			class="absolute right-0 bottom-0 left-0 z-10 flex items-center justify-between gap-3 border-t border-white/10 bg-black/65 px-4 py-3 backdrop-blur"
+		>
 			<div class="flex min-w-0 items-center gap-1.5 overflow-x-auto">
 				{#each images as image, imageIndex}
 					<button
@@ -260,13 +330,23 @@
 			</div>
 			<div class="flex shrink-0 items-center gap-2">
 				{#if canUseAsReference}
-					<Button variant="secondary" size="sm" class="bg-white/12 text-white hover:bg-white/20 hover:text-white" onclick={() => onUseAsReference?.(index)}>
+					<Button
+						variant="secondary"
+						size="sm"
+						class="bg-white/12 text-white hover:bg-white/20 hover:text-white"
+						onclick={() => onUseAsReference?.(index)}
+					>
 						<ImagePlus class="size-4" />
 						参考图
 					</Button>
 				{/if}
 				{#if canEditMask}
-					<Button variant="secondary" size="sm" class="bg-white/12 text-white hover:bg-white/20 hover:text-white" onclick={() => onEditMask?.(index)}>
+					<Button
+						variant="secondary"
+						size="sm"
+						class="bg-white/12 text-white hover:bg-white/20 hover:text-white"
+						onclick={() => onEditMask?.(index)}
+					>
 						<Paintbrush class="size-4" />
 						遮罩
 					</Button>

@@ -1,16 +1,34 @@
+import { Image } from '@tauri-apps/api/image';
 import { writeImage } from '@tauri-apps/plugin-clipboard-manager';
 import { dataUrlToDownloadBytes } from '$lib/domain/download';
 import { canUseTauriPlugins } from './runtime';
 
+export interface DecodedRgbaImage {
+	rgba: Uint8Array;
+	width: number;
+	height: number;
+}
+
 export interface CopyImageToClipboardOptions {
-	write?: (bytes: Uint8Array) => Promise<void>;
+	write?: (image: string | Image | Uint8Array | ArrayBuffer | number[]) => Promise<void>;
+	createNativeImage?: (
+		rgba: Uint8Array,
+		width: number,
+		height: number
+	) => Promise<string | Image | Uint8Array | ArrayBuffer | number[]>;
+	decodeImage?: (dataUrl: string) => Promise<DecodedRgbaImage>;
 	clipboardWrite?: (items: ClipboardItem[]) => Promise<void>;
 }
 
-export async function copyImageToClipboard(dataUrl: string, options: CopyImageToClipboardOptions = {}): Promise<'native' | 'browser'> {
+export async function copyImageToClipboard(
+	dataUrl: string,
+	options: CopyImageToClipboardOptions = {}
+): Promise<'native' | 'browser'> {
 	const bytes = dataUrlToDownloadBytes(dataUrl);
 	if (options.write || canUseTauriPlugins()) {
-		await (options.write ?? writeImage)(bytes);
+		const decoded = await (options.decodeImage ?? decodeDataUrlToRgbaImage)(dataUrl);
+		const image = await (options.createNativeImage ?? createNativeImage)(decoded.rgba, decoded.width, decoded.height);
+		await (options.write ?? writeImage)(image);
 		return 'native';
 	}
 
@@ -27,4 +45,35 @@ export async function copyImageToClipboard(dataUrl: string, options: CopyImageTo
 
 function getDataUrlMime(dataUrl: string): string | null {
 	return /^data:([^;,]+)[;,]/u.exec(dataUrl)?.[1] ?? null;
+}
+
+function createNativeImage(rgba: Uint8Array, width: number, height: number): Promise<Image> {
+	return Image.new(rgba, width, height);
+}
+
+async function decodeDataUrlToRgbaImage(dataUrl: string): Promise<DecodedRgbaImage> {
+	if (typeof document === 'undefined' || typeof window === 'undefined') {
+		throw new Error('当前环境不支持复制图片');
+	}
+	const image = await loadBrowserImage(dataUrl);
+	const canvas = document.createElement('canvas');
+	canvas.width = image.naturalWidth || image.width;
+	canvas.height = image.naturalHeight || image.height;
+	const ctx = canvas.getContext('2d');
+	if (!ctx || canvas.width <= 0 || canvas.height <= 0) throw new Error('图片解码失败');
+	ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+	return {
+		rgba: new Uint8Array(ctx.getImageData(0, 0, canvas.width, canvas.height).data),
+		width: canvas.width,
+		height: canvas.height
+	};
+}
+
+function loadBrowserImage(src: string): Promise<HTMLImageElement> {
+	return new Promise((resolve, reject) => {
+		const image = new window.Image();
+		image.onload = () => resolve(image);
+		image.onerror = () => reject(new Error('图片加载失败'));
+		image.src = src;
+	});
 }

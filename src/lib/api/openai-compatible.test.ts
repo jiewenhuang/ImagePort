@@ -207,10 +207,7 @@ describe('parseImagesGenerationResponse', () => {
 	});
 
 	test('keeps every returned image in response order', () => {
-		const parsed = parseImagesGenerationResponse(
-			{ data: [{ b64_json: 'first' }, { b64_json: 'second' }] },
-			'webp'
-		);
+		const parsed = parseImagesGenerationResponse({ data: [{ b64_json: 'first' }, { b64_json: 'second' }] }, 'webp');
 
 		expect(parsed.images).toEqual(['data:image/webp;base64,first', 'data:image/webp;base64,second']);
 	});

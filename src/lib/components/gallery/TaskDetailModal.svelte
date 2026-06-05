@@ -1,5 +1,16 @@
 <script lang="ts">
-	import { ChevronLeft, ChevronRight, Download, Heart, ImagePlus, Paintbrush, RotateCcw, Trash2, X } from '@lucide/svelte';
+	import {
+		ChevronLeft,
+		ChevronRight,
+		Clipboard,
+		Download,
+		Heart,
+		ImagePlus,
+		Paintbrush,
+		RotateCcw,
+		Trash2,
+		X
+	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
@@ -75,10 +86,22 @@
 		selectedIndex = (selectedIndex - 1 + previewImages.length) % previewImages.length;
 	}
 
+	function handlePreviousImageClick(event: MouseEvent) {
+		event.preventDefault();
+		event.stopPropagation();
+		selectPreviousImage();
+	}
+
 	function selectNextImage() {
 		const previewImages = task ? getPreviewImages(task) : [];
 		if (!previewImages.length) return;
 		selectedIndex = (selectedIndex + 1) % previewImages.length;
+	}
+
+	function handleNextImageClick(event: MouseEvent) {
+		event.preventDefault();
+		event.stopPropagation();
+		selectNextImage();
 	}
 
 	function extensionFromDataUrl(src: string) {
@@ -124,6 +147,14 @@
 		return record.images.length ? record.images : record.streamPartialImageIds;
 	}
 
+	function getPreviewTask(record: TaskRecord) {
+		return isPreviewingPartial(record) ? { ...record, images: record.streamPartialImageIds } : record;
+	}
+
+	function getDownloadableImageCount(record: TaskRecord) {
+		return record.images.length + record.streamPartialImageIds.length;
+	}
+
 	function isPreviewingPartial(record: TaskRecord) {
 		return !record.images.length && record.streamPartialImageIds.length > 0;
 	}
@@ -132,14 +163,31 @@
 {#if open && task}
 	{@const previewImages = getPreviewImages(task)}
 	{@const previewingPartial = isPreviewingPartial(task)}
+	{@const previewTask = getPreviewTask(task)}
+	{@const downloadableImageCount = getDownloadableImageCount(task)}
 	<div class="fixed inset-0 z-[60] flex items-center justify-center p-4">
-		<button type="button" class="absolute inset-0 cursor-default bg-black/40 backdrop-blur-sm" aria-label="关闭任务详情" onclick={close}></button>
-		<section class="bg-card text-card-foreground relative z-10 grid h-[86vh] w-full max-w-6xl grid-cols-[minmax(0,1fr)_320px] overflow-hidden rounded-lg border shadow-2xl max-lg:grid-cols-1">
+		<button
+			type="button"
+			class="absolute inset-0 cursor-default bg-black/40 backdrop-blur-sm"
+			aria-label="关闭任务详情"
+			onclick={close}
+		></button>
+		<section
+			class="bg-card text-card-foreground relative z-10 grid h-[86vh] w-full max-w-6xl grid-cols-[minmax(0,1fr)_320px] overflow-hidden rounded-lg border shadow-2xl max-lg:grid-cols-1"
+		>
 			<div class="bg-muted/50 flex min-h-0 flex-col">
 				<header class="border-border bg-background/80 flex items-center justify-between border-b px-4 py-3">
-					<div class="text-sm font-medium">{previewingPartial ? 'Partial 预览' : '输出预览'} {selectedIndex + 1}/{previewImages.length || 1}</div>
+					<div class="text-sm font-medium">
+						{previewingPartial ? 'Partial 预览' : '输出预览'}
+						{selectedIndex + 1}/{previewImages.length || 1}
+					</div>
 					<div class="flex items-center gap-1.5">
-						<Button variant={task.isFavorite ? 'secondary' : 'ghost'} size="icon-sm" onclick={() => onToggleFavorite(task.id)} aria-label={task.isFavorite ? '取消收藏' : '收藏任务'}>
+						<Button
+							variant={task.isFavorite ? 'secondary' : 'ghost'}
+							size="icon-sm"
+							onclick={() => onToggleFavorite(task.id)}
+							aria-label={task.isFavorite ? '取消收藏' : '收藏任务'}
+						>
 							<Heart class={`size-4 ${task.isFavorite ? 'fill-current text-rose-600' : ''}`} />
 						</Button>
 						<Button variant="ghost" size="icon-sm" onclick={close} aria-label="关闭">
@@ -151,49 +199,64 @@
 					{#if previewImages[selectedIndex]}
 						<div class="relative flex h-full w-full items-center justify-center">
 							<ImageActionContextMenu
-								canDownloadAll={canDownloadAll && previewImages.length > 1}
+								canDownloadAll={canDownloadAll && downloadableImageCount > 1}
 								canUseAsReference
 								canEditMask={!previewingPartial}
-								onOpen={() => onOpenLightbox(previewingPartial ? { ...task, images: task.streamPartialImageIds } : task, selectedIndex)}
+								onOpen={() => onOpenLightbox(previewTask, selectedIndex)}
 								onDownload={() => downloadImage(previewImages[selectedIndex], selectedIndex)}
 								onDownloadAll={() => onDownloadAll(task)}
 								onCopy={() => onCopyImage(previewImages[selectedIndex])}
-								onUseAsReference={() => onUseAsReference(previewingPartial ? { ...task, images: task.streamPartialImageIds } : task, selectedIndex)}
+								onUseAsReference={() => onUseAsReference(previewTask, selectedIndex)}
 								onEditMask={() => {
 									if (previewingPartial) return;
 									onEditMask(task, selectedIndex);
 									close();
 								}}
 							>
-								<button type="button" class="flex h-full w-full items-center justify-center" onclick={() => onOpenLightbox(previewingPartial ? { ...task, images: task.streamPartialImageIds } : task, selectedIndex)} aria-label="查看大图">
-									<img class="max-h-full max-w-full rounded-lg object-contain shadow-xl" src={previewImages[selectedIndex]} alt={task.prompt} />
+								<button
+									type="button"
+									class="group/preview flex h-full w-full items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+									onclick={() => onOpenLightbox(previewTask, selectedIndex)}
+									aria-label="查看大图"
+								>
+									<img
+										class="max-h-full max-w-full rounded-lg object-contain shadow-xl transition-transform duration-200 group-hover/preview:scale-[1.01]"
+										src={previewImages[selectedIndex]}
+										alt={task.prompt}
+									/>
 								</button>
 							</ImageActionContextMenu>
 							{#if previewImages.length > 1}
-								<Button
-									type="button"
-									variant="secondary"
-									size="icon"
-									class="absolute left-3 top-1/2 size-10 -translate-y-1/2 rounded-full bg-background/85 shadow-lg backdrop-blur hover:bg-background"
-									onclick={selectPreviousImage}
-									aria-label="上一张"
+								<div class="pointer-events-none absolute inset-y-0 left-3 z-10 flex items-center">
+									<Button
+										type="button"
+										variant="secondary"
+										size="icon"
+										class="pointer-events-auto size-10 rounded-full bg-background/85 shadow-lg backdrop-blur hover:bg-background active:not-aria-[haspopup]:translate-y-0"
+										onclick={handlePreviousImageClick}
+										aria-label="上一张"
+									>
+										<ChevronLeft class="size-5" />
+									</Button>
+								</div>
+								<div class="pointer-events-none absolute inset-y-0 right-3 z-10 flex items-center">
+									<Button
+										type="button"
+										variant="secondary"
+										size="icon"
+										class="pointer-events-auto size-10 rounded-full bg-background/85 shadow-lg backdrop-blur hover:bg-background active:not-aria-[haspopup]:translate-y-0"
+										onclick={handleNextImageClick}
+										aria-label="下一张"
+									>
+										<ChevronRight class="size-5" />
+									</Button>
+								</div>
+								<div
+									class="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/55 px-3 py-1.5 text-xs text-white shadow-lg backdrop-blur"
 								>
-									<ChevronLeft class="size-5" />
-								</Button>
-								<Button
-									type="button"
-									variant="secondary"
-									size="icon"
-									class="absolute right-3 top-1/2 size-10 -translate-y-1/2 rounded-full bg-background/85 shadow-lg backdrop-blur hover:bg-background"
-									onclick={selectNextImage}
-									aria-label="下一张"
-								>
-									<ChevronRight class="size-5" />
-								</Button>
-								<div class="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/55 px-3 py-1.5 text-xs text-white shadow-lg backdrop-blur">
-									<span>{selectedIndex + 1}/{task.images.length}</span>
+									<span>{selectedIndex + 1}/{previewImages.length}</span>
 									<div class="flex items-center gap-1">
-										{#each task.images as _, index}
+										{#each previewImages as _, index}
 											<button
 												type="button"
 												class={`size-1.5 rounded-full transition ${selectedIndex === index ? 'bg-white' : 'bg-white/45 hover:bg-white/75'}`}
@@ -238,7 +301,10 @@
 						</div>
 						<div>
 							<div class="text-muted-foreground">实际</div>
-							<Badge variant={task.params.n === 'auto' || task.images.length === task.params.n ? 'secondary' : 'outline'} class="mt-1">{formatImageCountRatio(task.images.length, task.params.n)} 张</Badge>
+							<Badge
+								variant={task.params.n === 'auto' || task.images.length === task.params.n ? 'secondary' : 'outline'}
+								class="mt-1">{formatImageCountRatio(task.images.length, task.params.n)} 张</Badge
+							>
 							{#if task.streamPartialImageIds.length}
 								<div class="text-muted-foreground mt-1">partial {task.streamPartialImageIds.length}</div>
 							{/if}
@@ -297,7 +363,9 @@
 						</div>
 					{/if}
 					{#if downloadError}
-						<div class="mt-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs leading-relaxed text-destructive">
+						<div
+							class="mt-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs leading-relaxed text-destructive"
+						>
 							{downloadError}
 						</div>
 					{/if}
@@ -315,10 +383,15 @@
 										onDownload={() => downloadImage(image.dataUrl, index)}
 										onDownloadAll={() => undefined}
 										onCopy={() => onCopyImage(image.dataUrl)}
-										onUseAsReference={() => onUseAsReference({ ...task, images: task.inputImages.map((item) => item.dataUrl) }, index)}
+										onUseAsReference={() =>
+											onUseAsReference({ ...task, images: task.inputImages.map((item) => item.dataUrl) }, index)}
 										onEditMask={() => undefined}
 									>
-										<button class="overflow-hidden rounded-md border border-border" onclick={() => onOpenInputLightbox(task, index)} aria-label={`查看输入图 ${index + 1}`}>
+										<button
+											class="overflow-hidden rounded-md border border-border"
+											onclick={() => onOpenInputLightbox(task, index)}
+											aria-label={`查看输入图 ${index + 1}`}
+										>
 											<img class="aspect-square w-full object-cover" src={image.dataUrl} alt={image.name} />
 										</button>
 									</ImageActionContextMenu>
@@ -333,7 +406,7 @@
 							<div class="grid grid-cols-3 gap-2">
 								{#each task.streamPartialImageIds as image, index}
 									<ImageActionContextMenu
-										canDownloadAll={canDownloadAll && task.streamPartialImageIds.length > 1}
+										canDownloadAll={canDownloadAll && downloadableImageCount > 1}
 										canUseAsReference
 										canEditMask={false}
 										onOpen={() => onOpenLightbox({ ...task, images: task.streamPartialImageIds }, index)}
@@ -343,9 +416,18 @@
 										onUseAsReference={() => onUseAsReference({ ...task, images: task.streamPartialImageIds }, index)}
 										onEditMask={() => undefined}
 									>
-										<button class="relative overflow-hidden rounded-md border border-border" onclick={() => onOpenLightbox({ ...task, images: task.streamPartialImageIds }, index)}>
-											<img class="aspect-square w-full object-cover" src={image} alt={`${task.prompt} partial ${index + 1}`} />
-											<span class="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">P{index + 1}</span>
+										<button
+											class="relative overflow-hidden rounded-md border border-border"
+											onclick={() => onOpenLightbox({ ...task, images: task.streamPartialImageIds }, index)}
+										>
+											<img
+												class="aspect-square w-full object-cover"
+												src={image}
+												alt={`${task.prompt} partial ${index + 1}`}
+											/>
+											<span class="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white"
+												>P{index + 1}</span
+											>
 										</button>
 									</ImageActionContextMenu>
 								{/each}
@@ -355,58 +437,101 @@
 
 					<div class="mt-5">
 						<div class="text-muted-foreground mb-2 text-xs font-medium">输出图</div>
-							<div class="grid grid-cols-3 gap-2">
-								{#each task.images as image, index}
-									<ImageActionContextMenu
-										canDownloadAll={canDownloadAll && task.images.length > 1}
-										canUseAsReference
-										canEditMask
-										onOpen={() => onOpenLightbox(task, index)}
-										onDownload={() => downloadImage(image, index)}
-										onDownloadAll={() => onDownloadAll(task)}
-										onCopy={() => onCopyImage(image)}
-										onUseAsReference={() => onUseAsReference(task, index)}
-										onEditMask={() => {
-											onEditMask(task, index);
-											close();
-										}}
+						<div class="grid grid-cols-3 gap-2">
+							{#each task.images as image, index}
+								<ImageActionContextMenu
+									canDownloadAll={canDownloadAll && downloadableImageCount > 1}
+									canUseAsReference
+									canEditMask
+									onOpen={() => onOpenLightbox(task, index)}
+									onDownload={() => downloadImage(image, index)}
+									onDownloadAll={() => onDownloadAll(task)}
+									onCopy={() => onCopyImage(image)}
+									onUseAsReference={() => onUseAsReference(task, index)}
+									onEditMask={() => {
+										onEditMask(task, index);
+										close();
+									}}
+								>
+									<button
+										class={`relative overflow-hidden rounded-md border ${selectedIndex === index ? 'border-primary ring-ring ring-2' : 'border-border'}`}
+										onclick={() => (selectedIndex = index)}
 									>
-										<button class={`relative overflow-hidden rounded-md border ${selectedIndex === index ? 'border-primary ring-ring ring-2' : 'border-border'}`} onclick={() => (selectedIndex = index)}>
-											<img class="aspect-square w-full object-cover" src={image} alt={`${task.prompt} ${index + 1}`} />
-											<span class="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">{index + 1}</span>
-										</button>
-									</ImageActionContextMenu>
-								{/each}
-							</div>
+										<img class="aspect-square w-full object-cover" src={image} alt={`${task.prompt} ${index + 1}`} />
+										<span class="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white"
+											>{index + 1}</span
+										>
+									</button>
+								</ImageActionContextMenu>
+							{/each}
+						</div>
 					</div>
 				</div>
 
-				<footer class="border-border grid grid-cols-2 gap-2 border-t p-4">
-					<Button variant="outline" onclick={() => { onReuse(task); close(); }}>
-						<RotateCcw class="size-4" />
-						复用
-					</Button>
-					<Button variant="outline" disabled={!previewImages[selectedIndex]} onclick={() => downloadImage(previewImages[selectedIndex], selectedIndex)}>
-						<Download class="size-4" />
-						下载当前
-					</Button>
-					{#if canDownloadAll}
-						<Button variant="outline" disabled={!task.images.length && !task.streamPartialImageIds.length} onclick={() => onDownloadAll(task)}>
-							<Download class="size-4" />
-							下载全部
+				<footer class="border-border space-y-3 border-t p-4">
+					<div class="grid grid-cols-2 gap-2">
+						<Button
+							variant="secondary"
+							class="justify-start"
+							onclick={() => {
+								onReuse(task);
+								close();
+							}}
+						>
+							<RotateCcw class="size-4" />
+							复用任务
 						</Button>
-					{/if}
-					<Button variant="outline" disabled={!previewImages[selectedIndex]} onclick={() => onUseAsReference(previewingPartial ? { ...task, images: task.streamPartialImageIds } : task, selectedIndex)}>
-						<ImagePlus class="size-4" />
-						用作参考
-					</Button>
-					<Button variant="outline" disabled={previewingPartial || !task.images[selectedIndex]} onclick={() => { onEditMask(task, selectedIndex); close(); }}>
-						<Paintbrush class="size-4" />
-						遮罩编辑
-					</Button>
+						<Button
+							variant="outline"
+							class="justify-start"
+							disabled={!previewImages[selectedIndex]}
+							onclick={() => onUseAsReference(previewTask, selectedIndex)}
+						>
+							<ImagePlus class="size-4" />
+							设为参考
+						</Button>
+					</div>
+					<div class="grid grid-cols-2 gap-2">
+						<Button
+							variant="outline"
+							class="justify-start"
+							disabled={!previewImages[selectedIndex]}
+							onclick={() => downloadImage(previewImages[selectedIndex], selectedIndex)}
+						>
+							<Download class="size-4" />
+							保存当前
+						</Button>
+						{#if canDownloadAll && downloadableImageCount > 1}
+							<Button variant="outline" class="justify-start" onclick={() => onDownloadAll(task)}>
+								<Download class="size-4" />
+								保存全部
+							</Button>
+						{/if}
+						<Button
+							variant="outline"
+							class="justify-start"
+							disabled={!previewImages[selectedIndex]}
+							onclick={() => onCopyImage(previewImages[selectedIndex])}
+						>
+							<Clipboard class="size-4" />
+							复制当前
+						</Button>
+						<Button
+							variant="outline"
+							class="justify-start"
+							disabled={previewingPartial || !task.images[selectedIndex]}
+							onclick={() => {
+								onEditMask(task, selectedIndex);
+								close();
+							}}
+						>
+							<Paintbrush class="size-4" />
+							编辑遮罩
+						</Button>
+					</div>
 					<AlertDialog.Root>
 						<AlertDialog.Trigger>
-							<Button variant="destructive">
+							<Button variant="destructive" class="w-full justify-center">
 								<Trash2 class="size-4" />
 								删除
 							</Button>
@@ -414,13 +539,16 @@
 						<AlertDialog.Content>
 							<AlertDialog.Header>
 								<AlertDialog.Title>删除这个任务？</AlertDialog.Title>
-								<AlertDialog.Description>
-									将删除当前任务及其本地图片文件。此操作不可恢复。
-								</AlertDialog.Description>
+								<AlertDialog.Description>将删除当前任务及其本地图片文件。此操作不可恢复。</AlertDialog.Description>
 							</AlertDialog.Header>
 							<AlertDialog.Footer>
 								<AlertDialog.Cancel>取消</AlertDialog.Cancel>
-								<AlertDialog.Action onclick={() => { onDelete(task.id); close(); }}>确认删除</AlertDialog.Action>
+								<AlertDialog.Action
+									onclick={() => {
+										onDelete(task.id);
+										close();
+									}}>确认删除</AlertDialog.Action
+								>
 							</AlertDialog.Footer>
 						</AlertDialog.Content>
 					</AlertDialog.Root>

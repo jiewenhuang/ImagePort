@@ -155,7 +155,9 @@ describe('buildImageProviderRequestGroup', () => {
 		expect(getCustomPollState({ data: { status: 'done' } }, provider.poll!)).toBe('success');
 		expect(getCustomPollState({ data: { status: 'queued' } }, provider.poll!)).toBe('pending');
 		expect(getCustomPollState({ data: { status: 'failed' } }, provider.poll!)).toBe('failure');
-		expect(buildCustomPollRequest(profile, provider.poll!, 'task-1').url).toBe('https://async.example.com/v1/tasks/task-1');
+		expect(buildCustomPollRequest(profile, provider.poll!, 'task-1').url).toBe(
+			'https://async.example.com/v1/tasks/task-1'
+		);
 	});
 
 	test('builds custom multipart edit requests from manifest file mappings', () => {

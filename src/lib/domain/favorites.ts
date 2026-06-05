@@ -24,7 +24,9 @@ export function normalizeFavoriteCollections(value: unknown, now = Date.now()): 
 		? value.map(normalizeFavoriteCollection).filter((item): item is FavoriteCollection => item != null)
 		: [];
 	const hasDefault = collections.some((collection) => collection.id === DEFAULT_FAVORITE_COLLECTION_ID);
-	return hasDefault ? dedupeCollections(collections) : [createDefaultFavoriteCollection(now), ...dedupeCollections(collections)];
+	return hasDefault
+		? dedupeCollections(collections)
+		: [createDefaultFavoriteCollection(now), ...dedupeCollections(collections)];
 }
 
 export function normalizeTaskFavoriteCollections(task: TaskRecord, collections: FavoriteCollection[]): TaskRecord {
@@ -63,7 +65,12 @@ export function toggleTaskFavoriteCollection(task: TaskRecord, collectionId: str
 	};
 }
 
-export function renameFavoriteCollection(collections: FavoriteCollection[], collectionId: string, name: string, now = Date.now()): FavoriteCollection[] {
+export function renameFavoriteCollection(
+	collections: FavoriteCollection[],
+	collectionId: string,
+	name: string,
+	now = Date.now()
+): FavoriteCollection[] {
 	const normalizedName = normalizeFavoriteCollectionName(name);
 	if (!normalizedName) return collections;
 	return collections.map((collection) =>
@@ -88,7 +95,11 @@ export function deleteFavoriteCollection(
 	return { tasks: nextTasks, collections: nextCollections };
 }
 
-export function createFavoriteCollection(name: string, createId: () => string, now = Date.now()): FavoriteCollection | null {
+export function createFavoriteCollection(
+	name: string,
+	createId: () => string,
+	now = Date.now()
+): FavoriteCollection | null {
 	const normalizedName = normalizeFavoriteCollectionName(name);
 	if (!normalizedName) return null;
 	return {
@@ -105,8 +116,10 @@ function normalizeFavoriteCollection(value: unknown): FavoriteCollection | null 
 	const id = typeof record.id === 'string' && record.id.trim() ? record.id.trim() : '';
 	const name = normalizeFavoriteCollectionName(record.name);
 	if (!id || !name) return null;
-	const createdAt = typeof record.createdAt === 'number' && Number.isFinite(record.createdAt) ? record.createdAt : Date.now();
-	const updatedAt = typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt) ? record.updatedAt : createdAt;
+	const createdAt =
+		typeof record.createdAt === 'number' && Number.isFinite(record.createdAt) ? record.createdAt : Date.now();
+	const updatedAt =
+		typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt) ? record.updatedAt : createdAt;
 	return { id, name, createdAt, updatedAt };
 }
 

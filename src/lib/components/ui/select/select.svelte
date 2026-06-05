@@ -6,13 +6,7 @@
 		value?: HTMLSelectAttributes['value'];
 	};
 
-	let {
-		class: className,
-		ref = $bindable(null),
-		value = $bindable(),
-		children,
-		...restProps
-	}: SelectProps = $props();
+	let { class: className, ref = $bindable(null), value = $bindable(), children, ...restProps }: SelectProps = $props();
 </script>
 
 <select

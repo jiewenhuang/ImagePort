@@ -1,7 +1,13 @@
 import { buildApiUrl } from '$lib/domain/url';
 import type { AgentConversation, AgentToolCallSummary } from '$lib/domain/agent';
 import type { ApiProfile, AppSettings } from '$lib/domain/settings';
-import { normalizeOutputImageCount, type InputImage, type MaskDraft, type NativeJsonRequest, type TaskParams } from '$lib/domain/types';
+import {
+	normalizeOutputImageCount,
+	type InputImage,
+	type MaskDraft,
+	type NativeJsonRequest,
+	type TaskParams
+} from '$lib/domain/types';
 
 const MIME_MAP: Record<string, string> = {
 	png: 'image/png',
@@ -38,7 +44,12 @@ export interface AgentResponsesResult {
 export function buildAgentResponsesRequest(input: BuildAgentResponsesRequestInput): NativeJsonRequest {
 	const previousResponseId = findPreviousResponseId(input.conversation, input.roundId);
 	const tools: Array<Record<string, unknown>> = [
-		buildAgentImageTool(input.params, input.inputImages.length > 0 || Boolean(input.mask), input.mask, input.partialImages)
+		buildAgentImageTool(
+			input.params,
+			input.inputImages.length > 0 || Boolean(input.mask),
+			input.mask,
+			input.partialImages
+		)
 	];
 	if (input.settings.agentWebSearch) {
 		tools.unshift({ type: 'web_search' });
@@ -66,13 +77,16 @@ export function buildAgentResponsesRequest(input: BuildAgentResponsesRequestInpu
 	};
 }
 
-export function parseAgentResponsesPayload(payload: unknown, outputFormat: TaskParams['output_format']): AgentResponsesResult {
+export function parseAgentResponsesPayload(
+	payload: unknown,
+	outputFormat: TaskParams['output_format']
+): AgentResponsesResult {
 	const output = isRecord(payload) && Array.isArray(payload.output) ? payload.output : [];
 	const text = readResponseText(payload, output);
 	const imageResult = readImageGenerationItems(output, outputFormat);
 	const toolCalls = readToolCalls(output);
 	return {
-		responseId: isRecord(payload) ? getString(payload.id) ?? null : null,
+		responseId: isRecord(payload) ? (getString(payload.id) ?? null) : null,
 		text,
 		images: imageResult.images,
 		partialImages: [],
@@ -115,7 +129,10 @@ export function parseAgentResponsesStreamEvents(
 			outputItems.push(event.item);
 			continue;
 		}
-		if ((type === 'response.completed' || type === 'response.failed' || type === 'response.incomplete') && isRecord(event.response)) {
+		if (
+			(type === 'response.completed' || type === 'response.failed' || type === 'response.incomplete') &&
+			isRecord(event.response)
+		) {
 			completedPayload = event.response;
 		}
 	}
@@ -135,7 +152,10 @@ export function parseAgentResponsesStreamEvents(
 	};
 }
 
-export function createAgentAssistantFallbackText(result: AgentResponsesResult, expectedImages: TaskParams['n']): string {
+export function createAgentAssistantFallbackText(
+	result: AgentResponsesResult,
+	expectedImages: TaskParams['n']
+): string {
 	if (result.text.trim()) return result.text.trim();
 	if (result.images.length) {
 		return expectedImages === 'auto'
@@ -213,7 +233,8 @@ function findPreviousResponseId(conversation: AgentConversation, roundId: string
 }
 
 function readResponseText(payload: unknown, output: unknown[]) {
-	if (isRecord(payload) && typeof payload.output_text === 'string' && payload.output_text.trim()) return payload.output_text.trim();
+	if (isRecord(payload) && typeof payload.output_text === 'string' && payload.output_text.trim())
+		return payload.output_text.trim();
 	const chunks: string[] = [];
 	for (const item of output) {
 		if (!isRecord(item)) continue;
@@ -288,7 +309,8 @@ function pickActualParamsFromRecord(record: Record<string, unknown>): Partial<Ta
 	const outputFormat = getString(record.output_format);
 	if (outputFormat === 'png' || outputFormat === 'jpeg' || outputFormat === 'webp') params.output_format = outputFormat;
 	const outputCompression = record.output_compression;
-	if (typeof outputCompression === 'number' && Number.isFinite(outputCompression)) params.output_compression = outputCompression;
+	if (typeof outputCompression === 'number' && Number.isFinite(outputCompression))
+		params.output_compression = outputCompression;
 	const moderation = getString(record.moderation);
 	if (moderation === 'auto' || moderation === 'low') params.moderation = moderation;
 	const count = normalizeOutputImageCount(record.n, null);

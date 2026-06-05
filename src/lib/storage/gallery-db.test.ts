@@ -151,7 +151,15 @@ describe('sql batch transaction helper', () => {
 			]
 		);
 
-		expect(calls).toEqual(['BEGIN IMMEDIATE', 'UPSERT ONE', 'DELETE STALE', 'COMMIT', 'ROLLBACK', 'UPSERT ONE', 'DELETE STALE']);
+		expect(calls).toEqual([
+			'BEGIN IMMEDIATE',
+			'UPSERT ONE',
+			'DELETE STALE',
+			'COMMIT',
+			'ROLLBACK',
+			'UPSERT ONE',
+			'DELETE STALE'
+		]);
 	});
 
 	test('rolls back and keeps operation errors visible', async () => {
@@ -273,9 +281,7 @@ describe('file-backed task payloads', () => {
 		const payload = await createFileBackedTaskPayload(original, files);
 		const legacyPayload = {
 			...payload,
-			task: Object.fromEntries(
-				Object.entries(payload.task).filter(([key]) => key !== 'streamPartialImageIds')
-			),
+			task: Object.fromEntries(Object.entries(payload.task).filter(([key]) => key !== 'streamPartialImageIds')),
 			imageRefs: {
 				...payload.imageRefs,
 				partials: undefined
@@ -363,7 +369,11 @@ describe('task image file cleanup', () => {
 		);
 
 		expect(result).toEqual({ removedCount: 3, failedCount: 0 });
-		expect(removed).toEqual(['images/outputs/stale.png', 'images/thumbs/old-thumb.png', 'images/partials/old-partial.png']);
+		expect(removed).toEqual([
+			'images/outputs/stale.png',
+			'images/thumbs/old-thumb.png',
+			'images/partials/old-partial.png'
+		]);
 	});
 
 	test('reports image files that could not be removed', async () => {

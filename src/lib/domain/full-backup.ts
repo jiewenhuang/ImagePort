@@ -8,12 +8,14 @@ export interface FullBackupManifest {
 	exportedAt: number;
 	settings: AppSettings;
 	agentConversations?: AgentConversation[];
-	tasks: Array<Omit<TaskRecord, 'images' | 'thumbnailImages' | 'inputImages' | 'mask'> & {
-		images: string[];
-		thumbnailImages?: string[];
-		inputImages: Array<Omit<InputImage, 'dataUrl'> & { dataUrl: string }>;
-		mask: (Omit<MaskDraft, 'dataUrl'> & { dataUrl: string }) | null;
-	}>;
+	tasks: Array<
+		Omit<TaskRecord, 'images' | 'thumbnailImages' | 'inputImages' | 'mask'> & {
+			images: string[];
+			thumbnailImages?: string[];
+			inputImages: Array<Omit<InputImage, 'dataUrl'> & { dataUrl: string }>;
+			mask: (Omit<MaskDraft, 'dataUrl'> & { dataUrl: string }) | null;
+		}
+	>;
 }
 
 export interface FullBackupFile {
@@ -35,7 +37,9 @@ export function buildFullBackupPayload(
 	const files: FullBackupFile[] = [];
 	const manifestTasks = tasks.map((task) => {
 		const taskDir = `tasks/${task.id}`;
-		const images = task.images.map((dataUrl, index) => addImageFile(files, `${taskDir}/outputs/${index + 1}.${extensionFromDataUrl(dataUrl)}`, dataUrl));
+		const images = task.images.map((dataUrl, index) =>
+			addImageFile(files, `${taskDir}/outputs/${index + 1}.${extensionFromDataUrl(dataUrl)}`, dataUrl)
+		);
 		const streamPartialImageIds = task.streamPartialImageIds.map((dataUrl, index) =>
 			addImageFile(files, `${taskDir}/partials/${index + 1}.${extensionFromDataUrl(dataUrl)}`, dataUrl)
 		);
@@ -44,12 +48,20 @@ export function buildFullBackupPayload(
 		);
 		const inputImages = task.inputImages.map((image, index) => ({
 			...image,
-			dataUrl: addImageFile(files, `${taskDir}/inputs/${index + 1}-${safePathPart(image.name)}.${extensionFromDataUrl(image.dataUrl)}`, image.dataUrl)
+			dataUrl: addImageFile(
+				files,
+				`${taskDir}/inputs/${index + 1}-${safePathPart(image.name)}.${extensionFromDataUrl(image.dataUrl)}`,
+				image.dataUrl
+			)
 		}));
 		const mask = task.mask
 			? {
 					...task.mask,
-					dataUrl: addImageFile(files, `${taskDir}/masks/${task.mask.targetImageId}.${extensionFromDataUrl(task.mask.dataUrl)}`, task.mask.dataUrl)
+					dataUrl: addImageFile(
+						files,
+						`${taskDir}/masks/${task.mask.targetImageId}.${extensionFromDataUrl(task.mask.dataUrl)}`,
+						task.mask.dataUrl
+					)
 				}
 			: null;
 		return {
@@ -108,11 +120,12 @@ export async function restoreFullBackupTasks(
 }
 
 export function imageBytesToDataUrl(bytes: Uint8Array, path: string): string {
-	const mime = path.endsWith('.jpg') || path.endsWith('.jpeg')
-		? 'image/jpeg'
-		: path.endsWith('.webp')
-			? 'image/webp'
-			: 'image/png';
+	const mime =
+		path.endsWith('.jpg') || path.endsWith('.jpeg')
+			? 'image/jpeg'
+			: path.endsWith('.webp')
+				? 'image/webp'
+				: 'image/png';
 	let binary = '';
 	for (const byte of bytes) binary += String.fromCharCode(byte);
 	return `data:${mime};base64,${btoa(binary)}`;
@@ -128,5 +141,11 @@ async function readImageRefs(paths: string[], readFile: (path: string) => Promis
 }
 
 function safePathPart(value: string): string {
-	return value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'image';
+	return (
+		value
+			.trim()
+			.replace(/[^a-zA-Z0-9._-]+/g, '-')
+			.replace(/^-+|-+$/g, '')
+			.slice(0, 48) || 'image'
+	);
 }

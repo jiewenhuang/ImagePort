@@ -132,11 +132,14 @@ describe('task import/export', () => {
 	});
 
 	test('summarizes imported task merge results', () => {
-		const summary = createTaskImportSummary([task({ id: 'existing' })], [
-			task({ id: 'newer', createdAt: 300 }),
-			task({ id: 'existing', prompt: 'duplicate' }),
-			task({ id: 'older', createdAt: 50 })
-		]);
+		const summary = createTaskImportSummary(
+			[task({ id: 'existing' })],
+			[
+				task({ id: 'newer', createdAt: 300 }),
+				task({ id: 'existing', prompt: 'duplicate' }),
+				task({ id: 'older', createdAt: 50 })
+			]
+		);
 
 		expect(summary.addedCount).toBe(2);
 		expect(summary.skippedDuplicateCount).toBe(1);
@@ -175,10 +178,7 @@ describe('mergeTaskSnapshots', () => {
 	});
 
 	test('adds stored tasks around newer in-memory tasks', () => {
-		const resolved = mergeTaskSnapshots(
-			[task({ id: 'new', createdAt: 300 })],
-			[task({ id: 'old', createdAt: 100 })]
-		);
+		const resolved = mergeTaskSnapshots([task({ id: 'new', createdAt: 300 })], [task({ id: 'old', createdAt: 100 })]);
 
 		expect(resolved.map((item) => item.id)).toEqual(['new', 'old']);
 	});

@@ -22,10 +22,13 @@ const params = {
 describe('agent runtime', () => {
 	test('builds a Responses request with image generation, web search and previous response id', () => {
 		let ids = 0;
-		const first = createAgentUserRound(createAgentConversation(1, () => `id-${ids++}`), {
-			prompt: 'first',
-			createId: () => `id-${ids++}`
-		});
+		const first = createAgentUserRound(
+			createAgentConversation(1, () => `id-${ids++}`),
+			{
+				prompt: 'first',
+				createId: () => `id-${ids++}`
+			}
+		);
 		const completed = completeAgentRound(first, first.rounds[0].id, {
 			content: 'ok',
 			responseId: 'resp-prev',
@@ -137,14 +140,32 @@ describe('agent runtime', () => {
 	});
 
 	test('reports Agent profile blockers', () => {
-		expect(getAgentRequestBlockReason(DEFAULT_SETTINGS.profiles[0], DEFAULT_SETTINGS)?.includes('Responses API')).toBe(true);
+		expect(getAgentRequestBlockReason(DEFAULT_SETTINGS.profiles[0], DEFAULT_SETTINGS)?.includes('Responses API')).toBe(
+			true
+		);
 		expect(
 			getAgentRequestBlockReason(
 				{ ...DEFAULT_SETTINGS.profiles[0], apiMode: 'responses', apiKey: 'sk-test' },
 				DEFAULT_SETTINGS
 			)
 		).toBe(null);
-		expect(createAgentAssistantFallbackText({ text: '', images: ['img'], partialImages: [], responseId: null, revisedPrompts: [], actualParamsList: [], actualParams: null, rawResponsePayload: null, toolCalls: [], toolCallCount: 0 }, 2)).toBe('已生成 1/2 张图片。');
+		expect(
+			createAgentAssistantFallbackText(
+				{
+					text: '',
+					images: ['img'],
+					partialImages: [],
+					responseId: null,
+					revisedPrompts: [],
+					actualParamsList: [],
+					actualParams: null,
+					rawResponsePayload: null,
+					toolCalls: [],
+					toolCallCount: 0
+				},
+				2
+			)
+		).toBe('已生成 1/2 张图片。');
 	});
 
 	test('enforces the configured tool-call budget after parsing', () => {

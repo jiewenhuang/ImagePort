@@ -16,7 +16,9 @@ export interface ImageRequestGroupSummary {
 }
 
 export function summarizeImageRequestGroup(results: PromiseSettledResult<CallApiResult>[]): ImageRequestGroupSummary {
-	const successfulResults = results.filter((result): result is PromiseFulfilledResult<CallApiResult> => result.status === 'fulfilled');
+	const successfulResults = results.filter(
+		(result): result is PromiseFulfilledResult<CallApiResult> => result.status === 'fulfilled'
+	);
 	const images = successfulResults.flatMap((result) => result.value.images);
 	const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
 
@@ -26,7 +28,9 @@ export function summarizeImageRequestGroup(results: PromiseSettledResult<CallApi
 				? result.value.actualParamsList
 				: result.value.images.map(() => result.value.actualParams)
 		);
-		const rawResponsePayloads = successfulResults.map((result) => result.value.rawResponsePayload).filter(isNonEmptyString);
+		const rawResponsePayloads = successfulResults
+			.map((result) => result.value.rawResponsePayload)
+			.filter(isNonEmptyString);
 		const streamPartialImages = successfulResults.flatMap((result) => result.value.streamPartialImages ?? []);
 		return {
 			images,
@@ -39,11 +43,12 @@ export function summarizeImageRequestGroup(results: PromiseSettledResult<CallApi
 			rawImageUrls: successfulResults.flatMap((result) => result.value.rawImageUrls ?? []),
 			actualParams: actualParamsList.find((params) => params && Object.keys(params).length > 0) ?? null,
 			actualParamsList,
-			rawResponsePayload: rawResponsePayloads.length === 0
-				? null
-				: rawResponsePayloads.length === 1
-					? rawResponsePayloads[0]
-					: JSON.stringify(rawResponsePayloads),
+			rawResponsePayload:
+				rawResponsePayloads.length === 0
+					? null
+					: rawResponsePayloads.length === 1
+						? rawResponsePayloads[0]
+						: JSON.stringify(rawResponsePayloads),
 			streamPartialImages
 		};
 	}

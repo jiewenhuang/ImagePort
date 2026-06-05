@@ -26,7 +26,10 @@ export interface GalleryImageRunnerDependencies {
 	nativeJsonRequest(request: NativeJsonRequest): Promise<NativeJsonResponse>;
 	nativeMultipartRequest(request: NativeMultipartRequest): Promise<NativeJsonResponse>;
 	nativeJsonStreamRequest(request: NativeStreamRequest, onChunk: (chunk: string) => void): Promise<NativeJsonResponse>;
-	nativeMultipartStreamRequest(request: NativeMultipartStreamRequest, onChunk: (chunk: string) => void): Promise<NativeJsonResponse>;
+	nativeMultipartStreamRequest(
+		request: NativeMultipartStreamRequest,
+		onChunk: (chunk: string) => void
+	): Promise<NativeJsonResponse>;
 	downloadImageAsDataUrl(url: string, fallbackMime: string): Promise<string>;
 	onPartialImages(taskId: string, partialImages: string[]): void;
 	createRequestId(): string;
@@ -172,7 +175,10 @@ function sleep(ms: number) {
 	return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 }
 
-function parseImageStreamPartialImages(events: Array<Record<string, unknown>>, outputFormat: TaskParams['output_format']): string[] {
+function parseImageStreamPartialImages(
+	events: Array<Record<string, unknown>>,
+	outputFormat: TaskParams['output_format']
+): string[] {
 	try {
 		return parseImageStreamEvents(events, outputFormat).partialImages;
 	} catch {
@@ -180,11 +186,18 @@ function parseImageStreamPartialImages(events: Array<Record<string, unknown>>, o
 	}
 }
 
-function readPartialImageFromEvent(event: Record<string, unknown>, outputFormat: TaskParams['output_format']): string[] {
+function readPartialImageFromEvent(
+	event: Record<string, unknown>,
+	outputFormat: TaskParams['output_format']
+): string[] {
 	const type = typeof event.type === 'string' ? event.type : '';
 	const object = typeof event.object === 'string' ? event.object : '';
 	const mime = `image/${outputFormat === 'jpeg' ? 'jpeg' : outputFormat}`;
-	if (type === 'image_generation.partial_image' || type === 'image_edit.partial_image' || object.endsWith('.partial_image')) {
+	if (
+		type === 'image_generation.partial_image' ||
+		type === 'image_edit.partial_image' ||
+		object.endsWith('.partial_image')
+	) {
 		const b64 = typeof event.b64_json === 'string' ? event.b64_json : null;
 		return b64 ? [`data:${mime};base64,${b64}`] : [];
 	}

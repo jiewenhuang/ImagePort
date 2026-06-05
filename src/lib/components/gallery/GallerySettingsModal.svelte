@@ -1,5 +1,17 @@
 <script lang="ts">
-	import { Bot, Copy, Download, FileJson, Info, Plus, Settings2, SlidersHorizontal, Trash2, Upload, X } from '@lucide/svelte';
+	import {
+		Bot,
+		Copy,
+		Download,
+		FileJson,
+		Info,
+		Plus,
+		Settings2,
+		SlidersHorizontal,
+		Trash2,
+		Upload,
+		X
+	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Select } from '$lib/components/ui/select';
@@ -140,11 +152,15 @@
 
 	function updateTimeout(event: Event) {
 		const value = Number((event.currentTarget as HTMLInputElement).value);
-		updateActiveProfile({ timeoutSecs: normalizeTimeoutSecs(Number.isFinite(value) ? value : activeProfile.timeoutSecs) });
+		updateActiveProfile({
+			timeoutSecs: normalizeTimeoutSecs(Number.isFinite(value) ? value : activeProfile.timeoutSecs)
+		});
 	}
 
 	function updateStreamPartialImages(event: Event) {
-		updateActiveProfile({ streamPartialImages: normalizeStreamPartialImages((event.currentTarget as HTMLInputElement).value) });
+		updateActiveProfile({
+			streamPartialImages: normalizeStreamPartialImages((event.currentTarget as HTMLInputElement).value)
+		});
 	}
 
 	function updateProvider(event: Event) {
@@ -154,7 +170,9 @@
 	}
 
 	function updateAgentMaxToolRounds(event: Event) {
-		updateSettings({ agentMaxToolRounds: normalizeAgentMaxToolRounds((event.currentTarget as HTMLInputElement).value) });
+		updateSettings({
+			agentMaxToolRounds: normalizeAgentMaxToolRounds((event.currentTarget as HTMLInputElement).value)
+		});
 	}
 
 	function toggleZipDownloadRoute(route: ZipDownloadRoute) {
@@ -168,10 +186,17 @@
 		const apiMode = (event.currentTarget as HTMLSelectElement).value as ApiMode;
 		const currentModel = activeProfile.model.trim();
 		const shouldUseDefaultModel =
-			currentModel === DEFAULT_IMAGES_MODEL || currentModel === DEFAULT_RESPONSES_MODEL || currentModel === 'gpt-5.1' || !currentModel;
+			currentModel === DEFAULT_IMAGES_MODEL ||
+			currentModel === DEFAULT_RESPONSES_MODEL ||
+			currentModel === 'gpt-5.1' ||
+			!currentModel;
 		updateActiveProfile({
 			apiMode,
-			model: shouldUseDefaultModel ? (apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL) : activeProfile.model
+			model: shouldUseDefaultModel
+				? apiMode === 'responses'
+					? DEFAULT_RESPONSES_MODEL
+					: DEFAULT_IMAGES_MODEL
+				: activeProfile.model
 		});
 	}
 
@@ -220,7 +245,9 @@
 	}
 
 	function updateReferenceImageEditAction(event: Event) {
-		updateSettings({ referenceImageEditAction: (event.currentTarget as HTMLSelectElement).value as ReferenceImageEditAction });
+		updateSettings({
+			referenceImageEditAction: (event.currentTarget as HTMLSelectElement).value as ReferenceImageEditAction
+		});
 	}
 
 	function requestNotificationPermission() {
@@ -355,7 +382,8 @@
 	}
 
 	function getTabDescription() {
-		if (activeTab === 'api') return '请求通过 Tauri 后端发送，支持 OpenAI-compatible Images、Responses 和自定义 HTTP 图像服务商。';
+		if (activeTab === 'api')
+			return '请求通过 Tauri 后端发送，支持 OpenAI-compatible Images、Responses 和自定义 HTTP 图像服务商。';
 		if (activeTab === 'general') return '控制输入、通知、复用和任务提交习惯。';
 		if (activeTab === 'agent') return 'Agent Workspace 使用 OpenAI Responses API，生成图片会落到 Gallery 任务。';
 		if (activeTab === 'about') return '应用版本、数据说明和当前能力边界。';
@@ -418,7 +446,9 @@
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/25 px-4 backdrop-blur-sm">
 		<button type="button" class="absolute inset-0 cursor-default" aria-label="关闭设置" onclick={close}></button>
 
-		<section class="bg-card text-card-foreground relative grid h-[88vh] w-full max-w-4xl grid-cols-[190px_minmax(0,1fr)] overflow-hidden rounded-lg border shadow-xl max-md:grid-cols-1">
+		<section
+			class="bg-card text-card-foreground relative grid h-[88vh] w-full max-w-4xl grid-cols-[190px_minmax(0,1fr)] overflow-hidden rounded-lg border shadow-xl max-md:grid-cols-1"
+		>
 			<aside class="border-border bg-muted/35 border-r p-3 max-md:border-r-0 max-md:border-b">
 				<div class="mb-4 flex items-center justify-between px-2">
 					<div>
@@ -431,23 +461,43 @@
 				</div>
 
 				<nav class="grid gap-1">
-					<Button variant={activeTab === 'general' ? 'secondary' : 'ghost'} class="justify-start" onclick={() => (activeTab = 'general')}>
+					<Button
+						variant={activeTab === 'general' ? 'secondary' : 'ghost'}
+						class="justify-start"
+						onclick={() => (activeTab = 'general')}
+					>
 						<SlidersHorizontal class="size-4" />
 						通用设置
 					</Button>
-					<Button variant={activeTab === 'api' ? 'secondary' : 'ghost'} class="justify-start" onclick={() => (activeTab = 'api')}>
+					<Button
+						variant={activeTab === 'api' ? 'secondary' : 'ghost'}
+						class="justify-start"
+						onclick={() => (activeTab = 'api')}
+					>
 						<Settings2 class="size-4" />
 						API 配置
 					</Button>
-					<Button variant={activeTab === 'agent' ? 'secondary' : 'ghost'} class="justify-start" onclick={() => (activeTab = 'agent')}>
+					<Button
+						variant={activeTab === 'agent' ? 'secondary' : 'ghost'}
+						class="justify-start"
+						onclick={() => (activeTab = 'agent')}
+					>
 						<Bot class="size-4" />
 						Agent 配置
 					</Button>
-					<Button variant={activeTab === 'data' ? 'secondary' : 'ghost'} class="justify-start" onclick={() => (activeTab = 'data')}>
+					<Button
+						variant={activeTab === 'data' ? 'secondary' : 'ghost'}
+						class="justify-start"
+						onclick={() => (activeTab = 'data')}
+					>
 						<FileJson class="size-4" />
 						下载与数据
 					</Button>
-					<Button variant={activeTab === 'about' ? 'secondary' : 'ghost'} class="justify-start" onclick={() => (activeTab = 'about')}>
+					<Button
+						variant={activeTab === 'about' ? 'secondary' : 'ghost'}
+						class="justify-start"
+						onclick={() => (activeTab = 'about')}
+					>
 						<Info class="size-4" />
 						关于
 					</Button>
@@ -474,15 +524,35 @@
 										<p class="text-muted-foreground mt-1 text-xs">为不同模型、代理或环境保存独立配置。</p>
 									</div>
 									<div class="flex shrink-0 items-center gap-1.5">
-										<Button type="button" variant="outline" size="icon-sm" onclick={createProfile} aria-label="新建配置" title="新建配置">
+										<Button
+											type="button"
+											variant="outline"
+											size="icon-sm"
+											onclick={createProfile}
+											aria-label="新建配置"
+											title="新建配置"
+										>
 											<Plus class="size-4" />
 										</Button>
 										{#if settings.customProviders.length}
-											<Button type="button" variant="outline" size="sm" onclick={() => createProfileForProvider(settings.customProviders[0].id)} title="新建自定义服务商配置">
+											<Button
+												type="button"
+												variant="outline"
+												size="sm"
+												onclick={() => createProfileForProvider(settings.customProviders[0].id)}
+												title="新建自定义服务商配置"
+											>
 												自定义
 											</Button>
 										{/if}
-										<Button type="button" variant="outline" size="icon-sm" onclick={copyProfile} aria-label="复制当前配置" title="复制当前配置">
+										<Button
+											type="button"
+											variant="outline"
+											size="icon-sm"
+											onclick={copyProfile}
+											aria-label="复制当前配置"
+											title="复制当前配置"
+										>
 											<Copy class="size-4" />
 										</Button>
 									</div>
@@ -490,7 +560,9 @@
 
 								<div class="grid gap-2">
 									{#each settings.profiles as profile}
-										<div class={`flex items-center gap-2 rounded-lg border px-2 py-2 ${profile.id === activeProfile.id ? 'border-primary/35 bg-primary/5' : 'bg-background/70'}`}>
+										<div
+											class={`flex items-center gap-2 rounded-lg border px-2 py-2 ${profile.id === activeProfile.id ? 'border-primary/35 bg-primary/5' : 'bg-background/70'}`}
+										>
 											<button
 												type="button"
 												class="min-w-0 flex-1 text-left"
@@ -499,11 +571,16 @@
 											>
 												<span class="block truncate text-sm font-medium">{displayProfileName(profile.name)}</span>
 												<span class="text-muted-foreground block truncate text-xs">
-													{getApiProviderLabel(settings, profile.provider)} · {profile.apiMode === 'responses' ? 'Responses' : 'Images'} · {profile.model}
+													{getApiProviderLabel(settings, profile.provider)} · {profile.apiMode === 'responses'
+														? 'Responses'
+														: 'Images'} · {profile.model}
 												</span>
 											</button>
 											{#if profile.id === activeProfile.id}
-												<span class="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-xs text-primary">当前</span>
+												<span
+													class="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-xs text-primary"
+													>当前</span
+												>
 											{/if}
 											<Button
 												type="button"
@@ -513,7 +590,9 @@
 												onclick={() => deleteProfile(profile.id)}
 												aria-label={`${pendingDeleteProfileId === profile.id ? '确认删除配置' : '删除配置'} ${displayProfileName(profile.name)}`}
 												title={pendingDeleteProfileId === profile.id ? '再次点击确认删除' : '删除配置'}
-												class={pendingDeleteProfileId === profile.id ? 'text-destructive hover:text-destructive' : undefined}
+												class={pendingDeleteProfileId === profile.id
+													? 'text-destructive hover:text-destructive'
+													: undefined}
 											>
 												<Trash2 class="size-3.5" />
 											</Button>
@@ -523,87 +602,144 @@
 							</section>
 
 							<div class="grid gap-4 sm:grid-cols-2">
-							<label class="block space-y-1.5">
-								<span class="text-sm font-medium">配置名称</span>
-								<Input value={activeProfile.name} name="profileName" oninput={(event) => updateActiveProfile({ name: (event.currentTarget as HTMLInputElement).value })} />
-							</label>
+								<label class="block space-y-1.5">
+									<span class="text-sm font-medium">配置名称</span>
+									<Input
+										value={activeProfile.name}
+										name="profileName"
+										oninput={(event) => updateActiveProfile({ name: (event.currentTarget as HTMLInputElement).value })}
+									/>
+								</label>
 
-							<label class="block space-y-1.5">
-								<span class="text-sm font-medium">服务商</span>
-								<Select value={activeProfile.provider} name="provider" onchange={updateProvider}>
-									<option value="openai">OpenAI Compatible</option>
-									{#each settings.customProviders as provider}
-										<option value={provider.id}>{provider.name}</option>
-									{/each}
-								</Select>
-								<span class="text-muted-foreground text-xs">切换服务商会保留当前服务商草稿，并套用新服务商默认 URL 和模型。</span>
-							</label>
+								<label class="block space-y-1.5">
+									<span class="text-sm font-medium">服务商</span>
+									<Select value={activeProfile.provider} name="provider" onchange={updateProvider}>
+										<option value="openai">OpenAI Compatible</option>
+										{#each settings.customProviders as provider}
+											<option value={provider.id}>{provider.name}</option>
+										{/each}
+									</Select>
+									<span class="text-muted-foreground text-xs"
+										>切换服务商会保留当前服务商草稿，并套用新服务商默认 URL 和模型。</span
+									>
+								</label>
 
-							<label class="block space-y-1.5 sm:col-span-2">
-								<span class="text-sm font-medium">API URL</span>
-								<Input value={activeProfile.baseUrl} name="baseUrl" placeholder="https://api.openai.com/v1" oninput={(event) => updateActiveProfile({ baseUrl: (event.currentTarget as HTMLInputElement).value })} />
-							</label>
+								<label class="block space-y-1.5 sm:col-span-2">
+									<span class="text-sm font-medium">API URL</span>
+									<Input
+										value={activeProfile.baseUrl}
+										name="baseUrl"
+										placeholder="https://api.openai.com/v1"
+										oninput={(event) =>
+											updateActiveProfile({ baseUrl: (event.currentTarget as HTMLInputElement).value })}
+									/>
+								</label>
 
-							<label class="block space-y-1.5">
-								<span class="text-sm font-medium">API Key</span>
-								<Input value={activeProfile.apiKey} name="apiKey" type="password" placeholder="sk-..." autocomplete="off" oninput={(event) => updateActiveProfile({ apiKey: (event.currentTarget as HTMLInputElement).value })} />
-							</label>
+								<label class="block space-y-1.5">
+									<span class="text-sm font-medium">API Key</span>
+									<Input
+										value={activeProfile.apiKey}
+										name="apiKey"
+										type="password"
+										placeholder="sk-..."
+										autocomplete="off"
+										oninput={(event) =>
+											updateActiveProfile({ apiKey: (event.currentTarget as HTMLInputElement).value })}
+									/>
+								</label>
 
-							<label class="block space-y-1.5">
-								<span class="text-sm font-medium">API 接口</span>
-								<Select value={activeProfile.apiMode} name="apiMode" onchange={updateApiMode} disabled={activeProfile.provider !== 'openai'}>
-									<option value="images">Images API (/v1/images)</option>
-									<option value="responses">Responses API (/v1/responses)</option>
-								</Select>
-							</label>
+								<label class="block space-y-1.5">
+									<span class="text-sm font-medium">API 接口</span>
+									<Select
+										value={activeProfile.apiMode}
+										name="apiMode"
+										onchange={updateApiMode}
+										disabled={activeProfile.provider !== 'openai'}
+									>
+										<option value="images">Images API (/v1/images)</option>
+										<option value="responses">Responses API (/v1/responses)</option>
+									</Select>
+								</label>
 
-							<label class="block space-y-1.5">
-								<span class="text-sm font-medium">Model</span>
-								<Input value={activeProfile.model} name="model" placeholder={activeProfile.apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL} oninput={(event) => updateActiveProfile({ model: (event.currentTarget as HTMLInputElement).value })} />
-							</label>
+								<label class="block space-y-1.5">
+									<span class="text-sm font-medium">Model</span>
+									<Input
+										value={activeProfile.model}
+										name="model"
+										placeholder={activeProfile.apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL}
+										oninput={(event) => updateActiveProfile({ model: (event.currentTarget as HTMLInputElement).value })}
+									/>
+								</label>
 
-							<label class="block space-y-1.5">
-								<span class="text-sm font-medium">请求超时 (秒)</span>
-								<Input value={activeProfile.timeoutSecs} name="timeoutSecs" type="number" min="10" max="1800" oninput={updateTimeout} />
-							</label>
+								<label class="block space-y-1.5">
+									<span class="text-sm font-medium">请求超时 (秒)</span>
+									<Input
+										value={activeProfile.timeoutSecs}
+										name="timeoutSecs"
+										type="number"
+										min="10"
+										max="1800"
+										oninput={updateTimeout}
+									/>
+								</label>
 
-							<SettingSwitch
-								title="流式图片"
-								description="OpenAI Images / Responses 可流式接收 partial 图片；自定义服务商当前使用普通请求。"
-								checked={activeProfile.streamImages}
-								disabled={activeProfile.provider !== 'openai'}
-								onToggle={() => updateActiveProfile({ streamImages: !activeProfile.streamImages })}
-							/>
+								<SettingSwitch
+									title="流式图片"
+									description="OpenAI Images / Responses 可流式接收 partial 图片；自定义服务商当前使用普通请求。"
+									checked={activeProfile.streamImages}
+									disabled={activeProfile.provider !== 'openai'}
+									onToggle={() => updateActiveProfile({ streamImages: !activeProfile.streamImages })}
+								/>
 
-							<label class={`block space-y-1.5 ${activeProfile.streamImages ? '' : 'opacity-60'}`}>
-								<span class="text-sm font-medium">中间图数量 partial_images</span>
-								<Input value={activeProfile.streamPartialImages} name="streamPartialImages" type="number" min="0" max="3" disabled={!activeProfile.streamImages} oninput={updateStreamPartialImages} />
-								<span class="text-muted-foreground text-xs">0-3。开启流式图片后，Gallery 和 Agent 会保存 partial 图片。</span>
-							</label>
+								<label class={`block space-y-1.5 ${activeProfile.streamImages ? '' : 'opacity-60'}`}>
+									<span class="text-sm font-medium">中间图数量 partial_images</span>
+									<Input
+										value={activeProfile.streamPartialImages}
+										name="streamPartialImages"
+										type="number"
+										min="0"
+										max="3"
+										disabled={!activeProfile.streamImages}
+										oninput={updateStreamPartialImages}
+									/>
+									<span class="text-muted-foreground text-xs"
+										>0-3。开启流式图片后，Gallery 和 Agent 会保存 partial 图片。</span
+									>
+								</label>
 
-							<SettingSwitch
-								title="返回 Base64 图片数据"
-								description="请求体追加 response_format: b64_json。部分网关不支持。"
-								checked={activeProfile.responseFormatB64Json}
-								onToggle={() => updateActiveProfile({ responseFormatB64Json: !activeProfile.responseFormatB64Json })}
-							/>
+								<SettingSwitch
+									title="返回 Base64 图片数据"
+									description="请求体追加 response_format: b64_json。部分网关不支持。"
+									checked={activeProfile.responseFormatB64Json}
+									onToggle={() => updateActiveProfile({ responseFormatB64Json: !activeProfile.responseFormatB64Json })}
+								/>
 
-							<SettingSwitch
-								title="Codex CLI 兼容模式"
-								description="兼容部分 OpenAI 代理网关的预留开关；默认不需要开启。"
-								checked={activeProfile.codexCli}
-								disabled={activeProfile.provider !== 'openai'}
-								onToggle={() => updateActiveProfile({ codexCli: !activeProfile.codexCli })}
-							/>
+								<SettingSwitch
+									title="Codex CLI 兼容模式"
+									description="兼容部分 OpenAI 代理网关的预留开关；默认不需要开启。"
+									checked={activeProfile.codexCli}
+									disabled={activeProfile.provider !== 'openai'}
+									onToggle={() => updateActiveProfile({ codexCli: !activeProfile.codexCli })}
+								/>
 							</div>
 
 							<section class="rounded-lg border bg-muted/20 p-3">
 								<div class="mb-3 flex items-center justify-between gap-3">
 									<div>
 										<h4 class="text-sm font-semibold">自定义服务商 Manifest</h4>
-										<p class="text-muted-foreground mt-1 text-xs">支持 JSON / multipart 提交、同步结果路径解析和 poll 异步任务轮询。</p>
+										<p class="text-muted-foreground mt-1 text-xs">
+											支持 JSON / multipart 提交、同步结果路径解析和 poll 异步任务轮询。
+										</p>
 									</div>
-									<Button type="button" variant="outline" size="sm" onclick={() => (customProviderJson = customProviderJson.trim() ? customProviderJson : defaultCustomProviderExample)}>
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										onclick={() =>
+											(customProviderJson = customProviderJson.trim()
+												? customProviderJson
+												: defaultCustomProviderExample)}
+									>
 										填入示例
 									</Button>
 								</div>
@@ -614,16 +750,22 @@
 											<div class="flex items-center gap-2 rounded-lg border bg-background/70 px-2 py-2">
 												<div class="min-w-0 flex-1">
 													<div class="truncate text-sm font-medium">{provider.name}</div>
-													<div class="text-muted-foreground truncate text-xs">{provider.id} · {provider.submit.contentType ?? 'json'} · {provider.submit.path}</div>
+													<div class="text-muted-foreground truncate text-xs">
+														{provider.id} · {provider.submit.contentType ?? 'json'} · {provider.submit.path}
+													</div>
 												</div>
-												<Button type="button" variant="ghost" size="xs" onclick={() => editCustomProvider(provider)}>编辑</Button>
+												<Button type="button" variant="ghost" size="xs" onclick={() => editCustomProvider(provider)}
+													>编辑</Button
+												>
 												<Button
 													type="button"
 													variant="ghost"
 													size="icon-xs"
 													onclick={() => deleteCustomProvider(provider.id)}
 													title={pendingDeleteCustomProviderId === provider.id ? '再次点击确认删除' : '删除服务商'}
-													class={pendingDeleteCustomProviderId === provider.id ? 'text-destructive hover:text-destructive' : undefined}
+													class={pendingDeleteCustomProviderId === provider.id
+														? 'text-destructive hover:text-destructive'
+														: undefined}
 												>
 													<Trash2 class="size-3.5" />
 												</Button>
@@ -647,7 +789,9 @@
 										{:else if customProviderSuccess}
 											<p class="text-emerald-700">{customProviderSuccess}</p>
 										{:else}
-											<p class="text-muted-foreground">模板变量：$prompt、$params.*、$profile.*、$inputImages.dataUrls、$mask.dataUrl。</p>
+											<p class="text-muted-foreground">
+												模板变量：$prompt、$params.*、$profile.*、$inputImages.dataUrls、$mask.dataUrl。
+											</p>
 										{/if}
 									</div>
 									<Button type="button" onclick={importCustomProvider} disabled={!customProviderJson.trim()}>
@@ -663,7 +807,8 @@
 								title="复用任务时临时使用原配置"
 								description="复用历史任务时，如果原 API 配置还存在，会优先用原配置生成。"
 								checked={settings.reuseTaskApiProfileTemporarily}
-								onToggle={() => updateSettings({ reuseTaskApiProfileTemporarily: !settings.reuseTaskApiProfileTemporarily })}
+								onToggle={() =>
+									updateSettings({ reuseTaskApiProfileTemporarily: !settings.reuseTaskApiProfileTemporarily })}
 							/>
 							<SettingSwitch
 								title="总是显示重试按钮"
@@ -693,24 +838,42 @@
 								title="任务完成通知"
 								description="生成完成时发送系统通知。首次开启会请求浏览器通知权限。"
 								checked={settings.taskCompletionNotification}
-								onToggle={() => settings.taskCompletionNotification ? updateSettings({ taskCompletionNotification: false }) : requestNotificationPermission()}
+								onToggle={() =>
+									settings.taskCompletionNotification
+										? updateSettings({ taskCompletionNotification: false })
+										: requestNotificationPermission()}
 							/>
 							<label class="block space-y-1.5 rounded-lg border bg-muted/25 p-3">
 								<span class="text-sm font-medium">参考图编辑默认行为</span>
-								<Select value={settings.referenceImageEditAction} name="referenceImageEditAction" onchange={updateReferenceImageEditAction}>
+								<Select
+									value={settings.referenceImageEditAction}
+									name="referenceImageEditAction"
+									onchange={updateReferenceImageEditAction}
+								>
 									<option value="ask">每次询问</option>
 									<option value="add-mask">添加遮罩</option>
 									<option value="replace-reference">替换参考图</option>
 								</Select>
-								<span class="text-muted-foreground text-xs">遮罩编辑会直接打开画笔；替换参考图会清空旧参考图后添加当前图。</span>
+								<span class="text-muted-foreground text-xs"
+									>遮罩编辑会直接打开画笔；替换参考图会清空旧参考图后添加当前图。</span
+								>
 							</label>
 						</div>
 					{:else if activeTab === 'agent'}
 						<div class="grid gap-3">
 							<label class="block space-y-1.5 rounded-lg border bg-muted/25 p-3">
 								<span class="text-sm font-medium">最大工具轮数</span>
-								<Input value={settings.agentMaxToolRounds} name="agentMaxToolRounds" type="number" min="1" max="50" oninput={updateAgentMaxToolRounds} />
-								<span class="text-muted-foreground text-xs">默认 15，范围 1-50。用于限制 Agent 连续调用工具，避免无限循环。</span>
+								<Input
+									value={settings.agentMaxToolRounds}
+									name="agentMaxToolRounds"
+									type="number"
+									min="1"
+									max="50"
+									oninput={updateAgentMaxToolRounds}
+								/>
+								<span class="text-muted-foreground text-xs"
+									>默认 15，范围 1-50。用于限制 Agent 连续调用工具，避免无限循环。</span
+								>
 							</label>
 							<SettingSwitch
 								title="Agent 回复后自动滚动到底部"
@@ -725,7 +888,8 @@
 								onToggle={() => updateSettings({ agentWebSearch: !settings.agentWebSearch })}
 							/>
 							<div class="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs leading-relaxed text-blue-800">
-								Agent 当前需要 OpenAI 服务商 + Responses API 配置。会话会持久化到 SQLite，图片结果会同步成为 Gallery 任务。
+								Agent 当前需要 OpenAI 服务商 + Responses API 配置。会话会持久化到 SQLite，图片结果会同步成为 Gallery
+								任务。
 							</div>
 						</div>
 					{:else if activeTab === 'data'}
@@ -748,7 +912,9 @@
 								<div class="flex items-start justify-between gap-4">
 									<div>
 										<h4 class="text-sm font-semibold">完整备份 ZIP</h4>
-										<p class="text-muted-foreground mt-1 text-xs">导出 manifest.json、设置、任务和图片文件；恢复时默认合并导入，不覆盖现有任务。</p>
+										<p class="text-muted-foreground mt-1 text-xs">
+											导出 manifest.json、设置、任务和图片文件；恢复时默认合并导入，不覆盖现有任务。
+										</p>
 									</div>
 									<div class="flex shrink-0 gap-2">
 										<Button onclick={onExportFullBackup} disabled={!tasks.length}>
@@ -761,7 +927,13 @@
 										</Button>
 									</div>
 								</div>
-								<input bind:this={fullBackupImportInput} type="file" accept="application/zip,.zip" class="hidden" onchange={importFullBackup} />
+								<input
+									bind:this={fullBackupImportInput}
+									type="file"
+									accept="application/zip,.zip"
+									class="hidden"
+									onchange={importFullBackup}
+								/>
 							</section>
 
 							<section class="rounded-lg border bg-muted/20 p-4">
@@ -780,7 +952,9 @@
 										<div class="mt-1 font-medium">{formatBytes(tasksStorageBytes)}</div>
 									</div>
 								</div>
-								<p class="text-muted-foreground mt-3 text-xs">更深入的丢失文件扫描会在完整数据管理阶段继续增强；当前不会自动删除任何历史图片。</p>
+								<p class="text-muted-foreground mt-3 text-xs">
+									更深入的丢失文件扫描会在完整数据管理阶段继续增强；当前不会自动删除任何历史图片。
+								</p>
 							</section>
 
 							<section class="rounded-lg border bg-muted/20 p-4">
@@ -817,14 +991,22 @@
 										导入
 									</Button>
 								</div>
-								<input bind:this={importInput} type="file" accept="application/json,.json" class="hidden" onchange={importSettings} />
+								<input
+									bind:this={importInput}
+									type="file"
+									accept="application/json,.json"
+									class="hidden"
+									onchange={importSettings}
+								/>
 							</section>
 
 							<section class="rounded-lg border bg-muted/20 p-4">
 								<div class="flex items-start justify-between gap-4">
 									<div>
 										<h4 class="text-sm font-semibold">导出任务</h4>
-										<p class="text-muted-foreground mt-1 text-xs">导出当前 {tasks.length} 个任务，包含生成图片 data URL。</p>
+										<p class="text-muted-foreground mt-1 text-xs">
+											导出当前 {tasks.length} 个任务，包含生成图片 data URL。
+										</p>
 										<p class={`mt-1 text-xs ${getStorageTone(tasksStorageBytes)}`}>
 											本地任务占用约 {formatBytes(tasksStorageBytes)}。图片较多时建议定期导出并清理。
 										</p>
@@ -853,14 +1035,22 @@
 										导入任务
 									</Button>
 								</div>
-								<input bind:this={taskImportInput} type="file" accept="application/json,.json" class="hidden" onchange={importTasks} />
+								<input
+									bind:this={taskImportInput}
+									type="file"
+									accept="application/json,.json"
+									class="hidden"
+									onchange={importTasks}
+								/>
 							</section>
 
 							<section class="rounded-lg border bg-muted/20 p-4">
 								<div class="flex items-start justify-between gap-4">
 									<div>
 										<h4 class="text-sm font-semibold">清理图片文件</h4>
-										<p class="text-muted-foreground mt-1 text-xs">扫描 AppLocalData 中不再被当前任务引用的输出图、缩略图、参考图和遮罩。</p>
+										<p class="text-muted-foreground mt-1 text-xs">
+											扫描 AppLocalData 中不再被当前任务引用的输出图、缩略图、参考图和遮罩。
+										</p>
 										{#if cleanupError}
 											<p class="mt-2 text-xs text-destructive">{cleanupError}</p>
 										{/if}
@@ -879,7 +1069,9 @@
 								<div class="flex items-start justify-between gap-4">
 									<div>
 										<h4 class="text-sm font-semibold text-destructive">清空任务</h4>
-										<p class="text-muted-foreground mt-1 text-xs">当前任务：{tasks.length} 个。此操作不会清除 API 配置。</p>
+										<p class="text-muted-foreground mt-1 text-xs">
+											当前任务：{tasks.length} 个。此操作不会清除 API 配置。
+										</p>
 									</div>
 									<AlertDialog.Root bind:open={showClearTasksDialog}>
 										<AlertDialog.Trigger>
@@ -909,7 +1101,8 @@
 							<section class="rounded-lg border bg-muted/20 p-4">
 								<h4 class="text-sm font-semibold">ImagePort</h4>
 								<p class="text-muted-foreground mt-2 text-sm leading-relaxed">
-									桌面端通过 Tauri 后端代理图像请求，避开浏览器跨域限制，同时把历史任务保存到 SQLite 和本地图片文件中。
+									ImagePort 是面向 OpenAI-compatible
+									图像生成工作流的桌面工作台，集中管理生成、参考图、遮罩编辑、历史归档和 Agent 辅助创作。
 								</p>
 								<div class="mt-4 grid grid-cols-2 gap-3 text-xs">
 									<div class="rounded-lg border bg-background/70 p-3">
@@ -933,10 +1126,12 @@
 							<section class="rounded-lg border bg-muted/20 p-4 text-sm leading-relaxed">
 								<h4 class="text-sm font-semibold">当前能力</h4>
 								<p class="text-muted-foreground mt-2">
-									Gallery 已支持 OpenAI-compatible Images / Responses、自定义服务商、参考图、遮罩编辑、多任务并发、流式 partial、历史持久化、Lightbox、右键菜单、下载、收藏集合和配置管理。
+									Gallery 已支持 OpenAI-compatible Images / Responses、自定义服务商、参考图、遮罩编辑、多任务并发、流式
+									partial、历史持久化、Lightbox、右键菜单、下载、收藏集合和配置管理。
 								</p>
 								<p class="text-muted-foreground mt-2">
-									Agent 已接入 Responses Workspace、会话持久化、停止/重试/继续、Web Search 开关、流式 partial 和图片落地 Gallery。
+									Agent 已接入 Responses Workspace、会话持久化、停止/重试/继续、Web Search 开关、流式 partial 和图片落地
+									Gallery。
 								</p>
 							</section>
 						</div>

@@ -49,7 +49,10 @@ describe('favorite collections', () => {
 			task({ id: 'c' })
 		];
 
-		expect(filterTasksByFavoriteCollection(tasks, ALL_FAVORITES_COLLECTION_ID).map((item) => item.id)).toEqual(['a', 'b']);
+		expect(filterTasksByFavoriteCollection(tasks, ALL_FAVORITES_COLLECTION_ID).map((item) => item.id)).toEqual([
+			'a',
+			'b'
+		]);
 		expect(filterTasksByFavoriteCollection(tasks, 'work').map((item) => item.id)).toEqual(['a']);
 	});
 

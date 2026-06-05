@@ -47,6 +47,9 @@ export function pruneSelectedTaskIds(selectedTaskIds: string[], availableTasks: 
 export function getSelectedCompletedTasks(tasks: TaskRecord[], selectedTaskIds: string[]): TaskRecord[] {
 	const selectedIds = new Set(selectedTaskIds);
 	return tasks.filter(
-		(task) => selectedIds.has(task.id) && (task.images.length > 0 || task.streamPartialImageIds.length > 0) && task.status !== 'running'
+		(task) =>
+			selectedIds.has(task.id) &&
+			(task.images.length > 0 || task.streamPartialImageIds.length > 0) &&
+			task.status !== 'running'
 	);
 }

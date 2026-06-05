@@ -3,7 +3,9 @@ export interface JsonServerSentEventCollector {
 	finish(): void;
 }
 
-export function createJsonServerSentEventCollector(onEvent: (event: Record<string, unknown>) => void): JsonServerSentEventCollector {
+export function createJsonServerSentEventCollector(
+	onEvent: (event: Record<string, unknown>) => void
+): JsonServerSentEventCollector {
 	let buffer = '';
 
 	function processBlock(block: string) {

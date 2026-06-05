@@ -126,9 +126,10 @@ function normalizeParams(value: unknown): TaskParams {
 		size: getString(record.size, DEFAULT_PARAMS.size),
 		quality: isQuality(record.quality) ? record.quality : DEFAULT_PARAMS.quality,
 		output_format: isOutputFormat(record.output_format) ? record.output_format : DEFAULT_PARAMS.output_format,
-		output_compression: typeof record.output_compression === 'number' && Number.isFinite(record.output_compression)
-			? Math.min(100, Math.max(0, Math.trunc(record.output_compression)))
-			: null,
+		output_compression:
+			typeof record.output_compression === 'number' && Number.isFinite(record.output_compression)
+				? Math.min(100, Math.max(0, Math.trunc(record.output_compression)))
+				: null,
 		moderation: isModeration(record.moderation) ? record.moderation : DEFAULT_PARAMS.moderation,
 		n: normalizeOutputImageCount(record.n)
 	};
@@ -136,11 +137,14 @@ function normalizeParams(value: unknown): TaskParams {
 
 function normalizeInputImages(value: unknown): InputImage[] {
 	if (!Array.isArray(value)) return [];
-	return value.filter(isRecord).map((image) => ({
-		id: getString(image.id, ''),
-		name: getString(image.name, 'input.png'),
-		dataUrl: getString(image.dataUrl, '')
-	})).filter((image) => image.id && image.dataUrl);
+	return value
+		.filter(isRecord)
+		.map((image) => ({
+			id: getString(image.id, ''),
+			name: getString(image.name, 'input.png'),
+			dataUrl: getString(image.dataUrl, '')
+		}))
+		.filter((image) => image.id && image.dataUrl);
 }
 
 function normalizeMask(value: unknown): MaskDraft | null {
@@ -161,7 +165,9 @@ function normalizeTaskStatus(value: unknown): TaskRecord['status'] {
 }
 
 function normalizeStringArray(value: unknown): string[] {
-	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+		: [];
 }
 
 function normalizePartialParams(value: unknown): Partial<TaskParams> | null {
@@ -190,7 +196,8 @@ function normalizeParamsRecord(value: unknown): Record<string, Partial<TaskParam
 function normalizeStringRecord(value: unknown): Record<string, string> {
 	if (!isRecord(value)) return {};
 	const entries = Object.entries(value).filter(
-		(entry): entry is [string, string] => Boolean(entry[0].trim()) && typeof entry[1] === 'string' && entry[1].trim().length > 0
+		(entry): entry is [string, string] =>
+			Boolean(entry[0].trim()) && typeof entry[1] === 'string' && entry[1].trim().length > 0
 	);
 	return Object.fromEntries(entries);
 }

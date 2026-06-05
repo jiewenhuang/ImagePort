@@ -180,9 +180,16 @@
 
 {#if open && image}
 	<div class="fixed inset-0 z-[70] flex items-center justify-center p-4">
-		<button type="button" class="absolute inset-0 cursor-default bg-black/45 backdrop-blur-sm" aria-label="关闭遮罩编辑" onclick={close}></button>
+		<button
+			type="button"
+			class="absolute inset-0 cursor-default bg-black/45 backdrop-blur-sm"
+			aria-label="关闭遮罩编辑"
+			onclick={close}
+		></button>
 
-		<section class="bg-card text-card-foreground relative z-10 grid h-[88vh] w-full max-w-6xl grid-cols-[minmax(0,1fr)_300px] overflow-hidden rounded-lg border shadow-2xl max-md:grid-cols-1">
+		<section
+			class="bg-card text-card-foreground relative z-10 grid h-[88vh] w-full max-w-6xl grid-cols-[minmax(0,1fr)_300px] overflow-hidden rounded-lg border shadow-2xl max-md:grid-cols-1"
+		>
 			<div class="bg-muted/60 flex min-h-0 flex-col">
 				<header class="border-border bg-background/90 flex items-center justify-between border-b px-4 py-3">
 					<div>
@@ -196,7 +203,8 @@
 
 				<div class="flex min-h-0 flex-1 items-center justify-center p-4">
 					<div class="relative max-h-full max-w-full overflow-hidden rounded-lg border bg-background shadow-xl">
-						<canvas bind:this={imageCanvas} class="block max-h-[calc(88vh-7rem)] max-w-full" aria-hidden="true"></canvas>
+						<canvas bind:this={imageCanvas} class="block max-h-[calc(88vh-7rem)] max-w-full" aria-hidden="true"
+						></canvas>
 						<canvas
 							bind:this={previewCanvas}
 							class="pointer-events-none absolute inset-0 block h-full w-full"

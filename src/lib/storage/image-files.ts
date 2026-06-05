@@ -8,7 +8,11 @@ export interface StoredImageFile {
 	mime: string;
 }
 
-export async function saveDataUrlImage(kind: StoredImageKind, id: string, dataUrl: string): Promise<StoredImageFile | null> {
+export async function saveDataUrlImage(
+	kind: StoredImageKind,
+	id: string,
+	dataUrl: string
+): Promise<StoredImageFile | null> {
 	if (!canUseTauriPlugins()) return null;
 	const parsed = dataUrlToBytes(dataUrl);
 	const extension = extensionForMime(parsed.mime);
@@ -43,7 +47,9 @@ export async function removeStoredImage(file: StoredImageFile): Promise<boolean>
 export async function listStoredImages(): Promise<StoredImageFile[]> {
 	if (!canUseTauriPlugins()) return [];
 	const files = await Promise.all(
-		(['inputs', 'outputs', 'masks', 'thumbs', 'partials'] satisfies StoredImageKind[]).map((kind) => listStoredImagesForKind(kind))
+		(['inputs', 'outputs', 'masks', 'thumbs', 'partials'] satisfies StoredImageKind[]).map((kind) =>
+			listStoredImagesForKind(kind)
+		)
 	);
 	return files.flat();
 }

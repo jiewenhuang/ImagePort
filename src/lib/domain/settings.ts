@@ -188,16 +188,23 @@ export function normalizeSettings(value: unknown): AppSettings {
 	const record = isRecord(value) ? value : {};
 	const customProviders = normalizeCustomProviderDefinitions(record.customProviders);
 	const customProviderIds = new Set(customProviders.map((provider) => provider.id));
-	const fallbackProfile = normalizeProfile({
-		...DEFAULT_SETTINGS.profiles[0],
-		baseUrl: getString(record.baseUrl, DEFAULT_SETTINGS.profiles[0].baseUrl),
-		apiKey: getString(record.apiKey, DEFAULT_SETTINGS.profiles[0].apiKey),
-		model: getString(record.model, DEFAULT_SETTINGS.profiles[0].model),
-		timeoutSecs: getNumber(record.timeoutSecs, getNumber(record.timeout, DEFAULT_API_TIMEOUT_SECS)),
-		responseFormatB64Json: getBoolean(record.responseFormatB64Json, DEFAULT_SETTINGS.profiles[0].responseFormatB64Json),
-		streamImages: getBoolean(record.streamImages, DEFAULT_SETTINGS.profiles[0].streamImages),
-		streamPartialImages: getNumber(record.streamPartialImages, DEFAULT_STREAM_PARTIAL_IMAGES)
-	}, customProviderIds) ?? DEFAULT_SETTINGS.profiles[0];
+	const fallbackProfile =
+		normalizeProfile(
+			{
+				...DEFAULT_SETTINGS.profiles[0],
+				baseUrl: getString(record.baseUrl, DEFAULT_SETTINGS.profiles[0].baseUrl),
+				apiKey: getString(record.apiKey, DEFAULT_SETTINGS.profiles[0].apiKey),
+				model: getString(record.model, DEFAULT_SETTINGS.profiles[0].model),
+				timeoutSecs: getNumber(record.timeoutSecs, getNumber(record.timeout, DEFAULT_API_TIMEOUT_SECS)),
+				responseFormatB64Json: getBoolean(
+					record.responseFormatB64Json,
+					DEFAULT_SETTINGS.profiles[0].responseFormatB64Json
+				),
+				streamImages: getBoolean(record.streamImages, DEFAULT_SETTINGS.profiles[0].streamImages),
+				streamPartialImages: getNumber(record.streamPartialImages, DEFAULT_STREAM_PARTIAL_IMAGES)
+			},
+			customProviderIds
+		) ?? DEFAULT_SETTINGS.profiles[0];
 	const rawProfiles = Array.isArray(record.profiles) ? record.profiles : [];
 	const profiles: ApiProfile[] = [];
 	for (const rawProfile of rawProfiles) {
@@ -215,9 +222,15 @@ export function normalizeSettings(value: unknown): AppSettings {
 		clearInputAfterSubmit: getBoolean(record.clearInputAfterSubmit, DEFAULT_SETTINGS.clearInputAfterSubmit),
 		persistInputOnRestart: getBoolean(record.persistInputOnRestart, DEFAULT_SETTINGS.persistInputOnRestart),
 		enterSubmit: getBoolean(record.enterSubmit, DEFAULT_SETTINGS.enterSubmit),
-		taskCompletionNotification: getBoolean(record.taskCompletionNotification, DEFAULT_SETTINGS.taskCompletionNotification),
+		taskCompletionNotification: getBoolean(
+			record.taskCompletionNotification,
+			DEFAULT_SETTINGS.taskCompletionNotification
+		),
 		referenceImageEditAction: normalizeReferenceImageEditAction(record.referenceImageEditAction),
-		reuseTaskApiProfileTemporarily: getBoolean(record.reuseTaskApiProfileTemporarily, DEFAULT_SETTINGS.reuseTaskApiProfileTemporarily),
+		reuseTaskApiProfileTemporarily: getBoolean(
+			record.reuseTaskApiProfileTemporarily,
+			DEFAULT_SETTINGS.reuseTaskApiProfileTemporarily
+		),
 		alwaysShowRetryButton: getBoolean(record.alwaysShowRetryButton, DEFAULT_SETTINGS.alwaysShowRetryButton),
 		zipDownloadRoutes: normalizeZipDownloadRoutes(record.zipDownloadRoutes),
 		agentMaxToolRounds: normalizeAgentMaxToolRounds(record.agentMaxToolRounds),
@@ -240,9 +253,7 @@ export function getTaskReuseProfile(settings: AppSettings, task: ReusableTaskPro
 	return (
 		settings.profiles.find(
 			(profile) =>
-				profile.provider === task.apiProvider &&
-				profile.apiMode === task.apiMode &&
-				profile.model === task.model
+				profile.provider === task.apiProvider && profile.apiMode === task.apiMode && profile.model === task.model
 		) ?? null
 	);
 }
@@ -270,7 +281,11 @@ export function addOpenAIProfile(settings: AppSettings, createId: () => string =
 	return addApiProfile(settings, 'openai', createId);
 }
 
-export function duplicateProfile(settings: AppSettings, profileId: string, createId: () => string = createProfileId): AppSettings {
+export function duplicateProfile(
+	settings: AppSettings,
+	profileId: string,
+	createId: () => string = createProfileId
+): AppSettings {
 	const source = settings.profiles.find((profile) => profile.id === profileId) ?? getActiveProfile(settings);
 	const profile: ApiProfile = {
 		...source,
@@ -365,19 +380,28 @@ export function parseImportedSettings(text: string): AppSettings {
 	return normalizeSettings(parsed);
 }
 
-export function getCustomProviderDefinition(settings: AppSettings | Partial<AppSettings> | unknown, provider: ApiProvider): CustomProviderDefinition | null {
+export function getCustomProviderDefinition(
+	settings: AppSettings | Partial<AppSettings> | unknown,
+	provider: ApiProvider
+): CustomProviderDefinition | null {
 	if (provider === 'openai') return null;
 	if (!isRecord(settings)) return null;
 	const providers = normalizeCustomProviderDefinitions(settings.customProviders);
 	return providers.find((item) => item.id === provider) ?? null;
 }
 
-export function getApiProviderLabel(settings: AppSettings | Partial<AppSettings> | unknown, provider: ApiProvider): string {
+export function getApiProviderLabel(
+	settings: AppSettings | Partial<AppSettings> | unknown,
+	provider: ApiProvider
+): string {
 	if (provider === 'openai') return 'OpenAI Compatible';
 	return getCustomProviderDefinition(settings, provider)?.name ?? provider;
 }
 
-export function importCustomProviderDefinitionFromJson(jsonText: string, existingProviders: CustomProviderDefinition[] = []): CustomProviderDefinition {
+export function importCustomProviderDefinitionFromJson(
+	jsonText: string,
+	existingProviders: CustomProviderDefinition[] = []
+): CustomProviderDefinition {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(stripMarkdownCodeFence(jsonText));
@@ -447,7 +471,11 @@ function normalizeProfile(value: unknown, customProviderIds = new Set<string>())
 	};
 }
 
-function createDefaultProfile(provider: ApiProvider, id: string, customProvider?: CustomProviderDefinition | null): ApiProfile {
+function createDefaultProfile(
+	provider: ApiProvider,
+	id: string,
+	customProvider?: CustomProviderDefinition | null
+): ApiProfile {
 	if (customProvider) {
 		return {
 			...DEFAULT_SETTINGS.profiles[0],
@@ -516,13 +544,17 @@ function normalizeCustomProviderDefinitions(input: unknown): CustomProviderDefin
 	return providers;
 }
 
-function normalizeCustomProviderDefinition(input: unknown, usedIds = new Set<string>()): CustomProviderDefinition | null {
+function normalizeCustomProviderDefinition(
+	input: unknown,
+	usedIds = new Set<string>()
+): CustomProviderDefinition | null {
 	if (!isRecord(input)) return null;
 	const template = input.template == null || input.template === 'http-image' ? 'http-image' : null;
 	if (!template || !isRecord(input.submit)) return null;
 	const rawName = getString(input.name, '自定义服务商');
 	const rawId = typeof input.id === 'string' ? input.id.trim() : '';
-	const id = rawId && !isBuiltInProvider(rawId) && !usedIds.has(rawId) ? rawId : createCustomProviderId(rawName, usedIds);
+	const id =
+		rawId && !isBuiltInProvider(rawId) && !usedIds.has(rawId) ? rawId : createCustomProviderId(rawName, usedIds);
 	usedIds.add(id);
 	return {
 		id,
@@ -572,15 +604,18 @@ const DEFAULT_EDIT_FILES: CustomProviderFileMapping[] = [
 
 function normalizeSubmitMapping(input: unknown, fallback: CustomProviderSubmitMapping): CustomProviderSubmitMapping {
 	const record = isRecord(input) ? input : {};
-	const contentType = record.contentType === 'multipart' ? 'multipart' : fallback.contentType ?? 'json';
+	const contentType = record.contentType === 'multipart' ? 'multipart' : (fallback.contentType ?? 'json');
 	return {
 		path: normalizeProviderPath(record.path, fallback.path),
-		method: record.method === 'GET' || record.method === 'POST' ? record.method : fallback.method ?? 'POST',
+		method: record.method === 'GET' || record.method === 'POST' ? record.method : (fallback.method ?? 'POST'),
 		contentType,
 		query: normalizeStringRecord(record.query) ?? fallback.query,
 		body: isRecord(record.body) ? record.body : fallback.body,
 		files: contentType === 'multipart' ? normalizeFileMappings(record.files, fallback.files) : undefined,
-		taskIdPath: typeof record.taskIdPath === 'string' && record.taskIdPath.trim() ? record.taskIdPath.trim() : fallback.taskIdPath,
+		taskIdPath:
+			typeof record.taskIdPath === 'string' && record.taskIdPath.trim()
+				? record.taskIdPath.trim()
+				: fallback.taskIdPath,
 		result: normalizeResultMapping(record.result, fallback.result ?? DEFAULT_OPENAI_RESULT)
 	};
 }
@@ -613,7 +648,10 @@ function normalizeResultMapping(input: unknown, fallback: CustomProviderResultMa
 	};
 }
 
-function normalizeFileMappings(input: unknown, fallback: CustomProviderFileMapping[] = []): CustomProviderFileMapping[] {
+function normalizeFileMappings(
+	input: unknown,
+	fallback: CustomProviderFileMapping[] = []
+): CustomProviderFileMapping[] {
 	if (!Array.isArray(input)) return fallback;
 	const files = input
 		.map((item): CustomProviderFileMapping | null => {
@@ -638,7 +676,8 @@ function normalizeProviderDrafts(input: unknown, customProviderIds: Set<string>)
 
 function normalizeProviderDraft(input: unknown) {
 	if (!isRecord(input)) return undefined;
-	const apiMode: ApiMode | undefined = input.apiMode === 'responses' || input.apiMode === 'images' ? input.apiMode : undefined;
+	const apiMode: ApiMode | undefined =
+		input.apiMode === 'responses' || input.apiMode === 'images' ? input.apiMode : undefined;
 	return {
 		baseUrl: typeof input.baseUrl === 'string' ? input.baseUrl : undefined,
 		model: typeof input.model === 'string' ? input.model : undefined,
@@ -653,8 +692,9 @@ function normalizeProviderDraft(input: unknown) {
 function normalizeStringRecord(input: unknown): Record<string, string> | undefined {
 	if (!isRecord(input)) return undefined;
 	const entries = Object.entries(input)
-		.filter((entry): entry is [string, string | number | boolean] =>
-			typeof entry[0] === 'string' && ['string', 'number', 'boolean'].includes(typeof entry[1])
+		.filter(
+			(entry): entry is [string, string | number | boolean] =>
+				typeof entry[0] === 'string' && ['string', 'number', 'boolean'].includes(typeof entry[1])
 		)
 		.map(([key, value]) => [key, String(value)] as const);
 	return entries.length ? Object.fromEntries(entries) : undefined;
@@ -662,7 +702,9 @@ function normalizeStringRecord(input: unknown): Record<string, string> | undefin
 
 function normalizeStringArray(input: unknown, fallback: string[]): string[] {
 	if (!Array.isArray(input)) return fallback;
-	const items = input.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim());
+	const items = input
+		.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+		.map((item) => item.trim());
 	return items.length ? items : fallback;
 }
 
@@ -672,11 +714,12 @@ function normalizeProviderPath(input: unknown, fallback: string): string {
 }
 
 function createCustomProviderId(name: string, usedIds: Set<string>): string {
-	const slug = name
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-+|-+$/g, '') || 'provider';
+	const slug =
+		name
+			.trim()
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, '-')
+			.replace(/^-+|-+$/g, '') || 'provider';
 	let id = `custom-${slug}`;
 	let index = 2;
 	while (usedIds.has(id) || isBuiltInProvider(id)) {
@@ -706,7 +749,9 @@ function normalizeFavoriteCollectionSettings(value: unknown): FavoriteCollection
 		? value.map(normalizeFavoriteCollectionSetting).filter((item): item is FavoriteCollectionSetting => item != null)
 		: [];
 	const hasDefault = collections.some((collection) => collection.id === DEFAULT_FAVORITE_COLLECTION_ID);
-	return hasDefault ? dedupeFavoriteCollections(collections) : [DEFAULT_SETTINGS.favoriteCollections[0], ...dedupeFavoriteCollections(collections)];
+	return hasDefault
+		? dedupeFavoriteCollections(collections)
+		: [DEFAULT_SETTINGS.favoriteCollections[0], ...dedupeFavoriteCollections(collections)];
 }
 
 function normalizeFavoriteCollectionSetting(value: unknown): FavoriteCollectionSetting | null {

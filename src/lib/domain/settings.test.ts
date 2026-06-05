@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
 	DEFAULT_SETTINGS,
-	addApiProfile,
 	addOpenAIProfile,
 	duplicateProfile,
 	getApiProviderLabel,

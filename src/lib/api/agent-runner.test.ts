@@ -13,13 +13,16 @@ const profile = {
 
 describe('agent runner', () => {
 	test('runs a non-streaming Responses request with a cancellable request id', async () => {
-		const conversation = createAgentUserRound(createAgentConversation(1, () => 'conv-1'), {
-			prompt: 'draw a small icon',
-			createId: (() => {
-				let id = 0;
-				return () => `id-${id++}`;
-			})()
-		});
+		const conversation = createAgentUserRound(
+			createAgentConversation(1, () => 'conv-1'),
+			{
+				prompt: 'draw a small icon',
+				createId: (() => {
+					let id = 0;
+					return () => `id-${id++}`;
+				})()
+			}
+		);
 		const result = await runAgentResponsesRequest({
 			conversation,
 			roundId: conversation.rounds[0].id,
@@ -63,13 +66,16 @@ describe('agent runner', () => {
 		const activeIds: Array<string | null> = [];
 		const textUpdates: string[] = [];
 		const partialUpdates: string[][] = [];
-		const conversation = createAgentUserRound(createAgentConversation(1, () => 'conv-1'), {
-			prompt: 'stream it',
-			createId: (() => {
-				let id = 0;
-				return () => `id-${id++}`;
-			})()
-		});
+		const conversation = createAgentUserRound(
+			createAgentConversation(1, () => 'conv-1'),
+			{
+				prompt: 'stream it',
+				createId: (() => {
+					let id = 0;
+					return () => `id-${id++}`;
+				})()
+			}
+		);
 		const result = await runAgentResponsesRequest({
 			conversation,
 			roundId: conversation.rounds[0].id,
@@ -88,7 +94,9 @@ describe('agent runner', () => {
 				expect(request.requestId).toBe('agent-stream-1');
 				onChunk('data: {"type":"response.output_text.delta","delta":"hello"}\n\n');
 				onChunk('data: {"type":"response.image_generation_call.partial_image","partial_image_b64":"partial"}\n\n');
-				onChunk('data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"final"}}\n\n');
+				onChunk(
+					'data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"final"}}\n\n'
+				);
 				return { status: 200, headers: {}, body: null };
 			},
 			onActiveRequestId: (requestId) => activeIds.push(requestId),
@@ -105,13 +113,16 @@ describe('agent runner', () => {
 	});
 
 	test('throws a stopped message when cancellation wins after streaming completes', async () => {
-		const conversation = createAgentUserRound(createAgentConversation(1, () => 'conv-1'), {
-			prompt: 'stop',
-			createId: (() => {
-				let id = 0;
-				return () => `id-${id++}`;
-			})()
-		});
+		const conversation = createAgentUserRound(
+			createAgentConversation(1, () => 'conv-1'),
+			{
+				prompt: 'stop',
+				createId: (() => {
+					let id = 0;
+					return () => `id-${id++}`;
+				})()
+			}
+		);
 		let message = '';
 		try {
 			await runAgentResponsesRequest({

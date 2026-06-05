@@ -135,7 +135,10 @@ export const DEFAULT_PARAMS: TaskParams = {
 export function normalizeOutputImageCount(value: unknown): OutputImageCount;
 export function normalizeOutputImageCount(value: unknown, fallback: OutputImageCount): OutputImageCount;
 export function normalizeOutputImageCount(value: unknown, fallback: null): OutputImageCount | null;
-export function normalizeOutputImageCount(value: unknown, fallback: OutputImageCount | null = DEFAULT_PARAMS.n): OutputImageCount | null {
+export function normalizeOutputImageCount(
+	value: unknown,
+	fallback: OutputImageCount | null = DEFAULT_PARAMS.n
+): OutputImageCount | null {
 	if (value === 'auto') return 'auto';
 	if (typeof value === 'number' && Number.isFinite(value)) return Math.max(1, Math.trunc(value));
 	return fallback;

@@ -1,10 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import {
-	getWrappedImageIndex,
-	panLightboxTransform,
-	resetLightboxTransform,
-	zoomLightboxTransform
-} from './lightbox';
+import { getWrappedImageIndex, panLightboxTransform, resetLightboxTransform, zoomLightboxTransform } from './lightbox';
 
 describe('lightbox helpers', () => {
 	test('wraps navigation in both directions', () => {

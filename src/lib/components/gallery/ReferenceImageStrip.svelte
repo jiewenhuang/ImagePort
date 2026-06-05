@@ -23,11 +23,18 @@
 <div class="mb-3 flex items-start gap-2 overflow-x-auto pb-1">
 	{#each images as image, index}
 		{@const isMaskTarget = mask?.targetImageId === image.id}
-		<div class={`group relative size-14 shrink-0 overflow-hidden rounded-lg border ${isMaskTarget ? 'border-primary ring-ring ring-2' : 'border-border'}`}>
+		<div
+			class={`group relative size-14 shrink-0 overflow-hidden rounded-lg border ${isMaskTarget ? 'border-primary ring-ring ring-2' : 'border-border'}`}
+		>
 			<img class="h-full w-full object-cover" src={image.dataUrl} alt={image.name} />
-			<span class="absolute bottom-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white">{index + 1}</span>
+			<span class="absolute bottom-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white"
+				>{index + 1}</span
+			>
 			{#if isMaskTarget}
-				<span class="absolute top-1 left-1 rounded bg-primary px-1.5 py-0.5 text-[9px] font-bold text-primary-foreground">MASK</span>
+				<span
+					class="absolute top-1 left-1 rounded bg-primary px-1.5 py-0.5 text-[9px] font-bold text-primary-foreground"
+					>MASK</span
+				>
 			{/if}
 			<button
 				type="button"
@@ -51,12 +58,24 @@
 		</div>
 	{/each}
 
-	<Button variant="outline" size="icon-lg" class="size-14 shrink-0 rounded-lg border-dashed" onclick={onAdd} aria-label="添加参考图">
+	<Button
+		variant="outline"
+		size="icon-lg"
+		class="size-14 shrink-0 rounded-lg border-dashed"
+		onclick={onAdd}
+		aria-label="添加参考图"
+	>
 		<ImagePlus class="size-5" />
 	</Button>
 
 	{#if images.length}
-		<Button variant="ghost" size="icon-lg" class="size-14 shrink-0 rounded-lg text-muted-foreground hover:text-destructive" onclick={onClear} aria-label="清空参考图">
+		<Button
+			variant="ghost"
+			size="icon-lg"
+			class="size-14 shrink-0 rounded-lg text-muted-foreground hover:text-destructive"
+			onclick={onClear}
+			aria-label="清空参考图"
+		>
 			<Trash2 class="size-5" />
 		</Button>
 	{/if}

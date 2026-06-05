@@ -376,7 +376,9 @@ function normalizeMask(value: unknown): MaskDraft | null {
 }
 
 function normalizeStringArray(value: unknown): string[] {
-	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+		: [];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

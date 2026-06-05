@@ -100,16 +100,20 @@ function buildOpenAIRequestGroup(input: BuildProviderRequestGroupInput): Provide
 				...requestInput,
 				inputImages: input.mask ? orderImagesForMask(input.inputImages, input.mask.targetImageId) : input.inputImages,
 				mask: input.mask
-			} satisfies ImageEditRequestInput).map((request): ProviderNativeRequest => ({
-				kind: 'multipart',
-				request,
-				parse: (payload) => parseImagesGenerationResponse(payload, input.params.output_format)
-			}))
-		: buildImagesGenerationRequests(requestInput).map((request): ProviderNativeRequest => ({
-				kind: 'json',
-				request,
-				parse: (payload) => parseImagesGenerationResponse(payload, input.params.output_format)
-			}));
+			} satisfies ImageEditRequestInput).map(
+				(request): ProviderNativeRequest => ({
+					kind: 'multipart',
+					request,
+					parse: (payload) => parseImagesGenerationResponse(payload, input.params.output_format)
+				})
+			)
+		: buildImagesGenerationRequests(requestInput).map(
+				(request): ProviderNativeRequest => ({
+					kind: 'json',
+					request,
+					parse: (payload) => parseImagesGenerationResponse(payload, input.params.output_format)
+				})
+			);
 
 	return {
 		provider: 'openai',
@@ -176,7 +180,10 @@ export interface ParsedImageStreamEvents {
 	result: CallApiResult;
 }
 
-export function parseResponsesImageResponse(payload: unknown, outputFormat: TaskParams['output_format']): CallApiResult {
+export function parseResponsesImageResponse(
+	payload: unknown,
+	outputFormat: TaskParams['output_format']
+): CallApiResult {
 	const output = isRecord(payload) && Array.isArray(payload.output) ? payload.output : [];
 	const mime = MIME_MAP[outputFormat] ?? 'image/png';
 	const images: string[] = [];
@@ -212,7 +219,10 @@ function readResponsesImageResultBase64(result: unknown): string | undefined {
 	return undefined;
 }
 
-export function parseImageStreamEvents(events: Array<Record<string, unknown>>, outputFormat: TaskParams['output_format']): ParsedImageStreamEvents {
+export function parseImageStreamEvents(
+	events: Array<Record<string, unknown>>,
+	outputFormat: TaskParams['output_format']
+): ParsedImageStreamEvents {
 	const mime = MIME_MAP[outputFormat] ?? 'image/png';
 	const partialImages: string[] = [];
 	const completedItems: Array<Record<string, unknown>> = [];
@@ -267,7 +277,10 @@ function parseStreamResultPayload(payload: unknown, outputFormat: TaskParams['ou
 	return parseImagesGenerationResponse(payload, outputFormat);
 }
 
-function parseCompletedStreamItems(items: Array<Record<string, unknown>>, outputFormat: TaskParams['output_format']): CallApiResult {
+function parseCompletedStreamItems(
+	items: Array<Record<string, unknown>>,
+	outputFormat: TaskParams['output_format']
+): CallApiResult {
 	if (!items.length) throw new Error('流式接口未返回最终图片数据');
 	const mime = MIME_MAP[outputFormat] ?? 'image/png';
 	const images = items
@@ -301,7 +314,8 @@ export function buildCustomProviderRequestGroup(
 				kind: request.kind,
 				request: request.request as NativeJsonRequest & NativeMultipartRequest,
 				parse: (payload) => parseCustomProviderResponse(payload, mapping.result ?? {}, input.params.output_format),
-				customAsync: mapping.taskIdPath && customProvider.poll ? { submit: mapping, poll: customProvider.poll } : undefined
+				customAsync:
+					mapping.taskIdPath && customProvider.poll ? { submit: mapping, poll: customProvider.poll } : undefined
 			} as ProviderNativeRequest
 		]
 	};
@@ -312,7 +326,11 @@ export function readCustomTaskId(payload: unknown, mapping: CustomProviderSubmit
 	return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-export function buildCustomPollRequest(profile: ApiProfile, poll: CustomProviderPollMapping, taskId: string): NativeJsonRequest {
+export function buildCustomPollRequest(
+	profile: ApiProfile,
+	poll: CustomProviderPollMapping,
+	taskId: string
+): NativeJsonRequest {
 	return {
 		url: buildApiUrl(profile.baseUrl, appendQuery(buildTaskPath(poll.path, taskId), poll.query)),
 		method: poll.method ?? 'GET',
@@ -323,7 +341,10 @@ export function buildCustomPollRequest(profile: ApiProfile, poll: CustomProvider
 	};
 }
 
-export function getCustomPollState(payload: unknown, poll: CustomProviderPollMapping): 'success' | 'failure' | 'pending' {
+export function getCustomPollState(
+	payload: unknown,
+	poll: CustomProviderPollMapping
+): 'success' | 'failure' | 'pending' {
 	const status = getByPath(payload, poll.statusPath);
 	const statusText = typeof status === 'string' ? status : String(status ?? '');
 	if (poll.successValues.includes(statusText)) return 'success';
@@ -377,7 +398,9 @@ export function parseCustomProviderResponse(
 	const mime = MIME_MAP[outputFormat] ?? 'image/png';
 	const images: string[] = [];
 	const imageUrls = (result.imageUrlPaths ?? []).flatMap((path) =>
-		getAllByPath(payload, path).filter((value): value is string => typeof value === 'string' && (isHttpUrl(value) || isDataUrl(value)))
+		getAllByPath(payload, path).filter(
+			(value): value is string => typeof value === 'string' && (isHttpUrl(value) || isDataUrl(value))
+		)
 	);
 	for (const path of result.b64JsonPaths ?? []) {
 		for (const value of getAllByPath(payload, path)) {
@@ -410,7 +433,11 @@ function createCustomProviderContext(input: BuildProviderRequestGroupInput) {
 	};
 }
 
-function createCustomFields(mapping: CustomProviderSubmitMapping, context: Record<string, unknown>, responseFormatB64Json: boolean) {
+function createCustomFields(
+	mapping: CustomProviderSubmitMapping,
+	context: Record<string, unknown>,
+	responseFormatB64Json: boolean
+) {
 	const resolved = resolveTemplateValue(mapping.body ?? {}, context);
 	const record = isRecord(resolved) ? resolved : {};
 	if (responseFormatB64Json) record.response_format = 'b64_json';
@@ -485,9 +512,7 @@ function appendQuery(path: string, query?: Record<string, string>) {
 }
 
 function buildTaskPath(path: string, taskId: string) {
-	return path
-		.replace(/\{task_id\}/g, encodeURIComponent(taskId))
-		.replace(/\{taskId\}/g, encodeURIComponent(taskId));
+	return path.replace(/\{task_id\}/g, encodeURIComponent(taskId)).replace(/\{taskId\}/g, encodeURIComponent(taskId));
 }
 
 function getCustomProvider(settings: AppSettings, provider: string): CustomProviderDefinition | null {
@@ -509,7 +534,8 @@ function pickActualParamsFromRecord(record: Record<string, unknown>): Partial<Ta
 	const outputFormat = getStringValue(record, 'output_format');
 	if (outputFormat === 'png' || outputFormat === 'jpeg' || outputFormat === 'webp') params.output_format = outputFormat;
 	const outputCompression = record.output_compression;
-	if (typeof outputCompression === 'number' && Number.isFinite(outputCompression)) params.output_compression = outputCompression;
+	if (typeof outputCompression === 'number' && Number.isFinite(outputCompression))
+		params.output_compression = outputCompression;
 	const moderation = getStringValue(record, 'moderation');
 	if (moderation === 'auto' || moderation === 'low') params.moderation = moderation;
 	const count = normalizeOutputImageCount(record.n, null);
@@ -519,12 +545,15 @@ function pickActualParamsFromRecord(record: Record<string, unknown>): Partial<Ta
 
 function getByPath(source: unknown, path: string | undefined): unknown {
 	if (!path) return source;
-	return path.split('.').filter(Boolean).reduce<unknown>((current, key) => {
-		if (current == null) return undefined;
-		if (/^\d+$/.test(key) && Array.isArray(current)) return current[Number(key)];
-		if (isRecord(current)) return current[key];
-		return undefined;
-	}, source);
+	return path
+		.split('.')
+		.filter(Boolean)
+		.reduce<unknown>((current, key) => {
+			if (current == null) return undefined;
+			if (/^\d+$/.test(key) && Array.isArray(current)) return current[Number(key)];
+			if (isRecord(current)) return current[key];
+			return undefined;
+		}, source);
 }
 
 function getAllByPath(source: unknown, path: string | undefined): unknown[] {
