@@ -57,7 +57,7 @@ await writeFile(
 	cargoLockPath,
 	replaceOrFail(
 		cargoLock,
-		/(\[\[package\]\]\nname = "imageport-desktop"\nversion = )".*"/,
+		/(\[\[package\]\]\r?\nname = "imageport-desktop"\r?\nversion = )".*"/,
 		`$1"${version}"`,
 		cargoLockPath,
 	),
