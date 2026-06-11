@@ -33,6 +33,7 @@ export interface GalleryImageRunnerDependencies {
 	downloadImageAsDataUrl(url: string, fallbackMime: string): Promise<string>;
 	onPartialImages(taskId: string, partialImages: string[]): void;
 	createRequestId(): string;
+	isCanceled?: () => boolean;
 }
 
 export interface GalleryImageRunnerInput extends GalleryImageRunnerDependencies {
@@ -156,11 +157,14 @@ async function resolveCustomQueuePayload(
 	const deadline = Date.now() + Math.max(1, profile.timeoutSecs) * 1000;
 	const poll = providerRequest.customAsync.poll;
 	while (Date.now() < deadline) {
+		throwIfCanceled(deps);
 		await sleep(Math.max(1, poll.intervalSeconds ?? 5) * 1000);
+		throwIfCanceled(deps);
 		const pollResponse = await deps.nativeJsonRequest({
 			...buildCustomPollRequest(profile, poll, taskId),
 			requestId: deps.createRequestId()
 		});
+		throwIfCanceled(deps);
 		if (pollResponse.status < 200 || pollResponse.status >= 300) {
 			throw new Error(getNativeResponseErrorMessage(pollResponse.body, pollResponse.status));
 		}
@@ -169,6 +173,10 @@ async function resolveCustomQueuePayload(
 		if (state === 'success') return pollResponse.body;
 	}
 	throw new Error('自定义服务商异步任务等待超时');
+}
+
+function throwIfCanceled(deps: GalleryImageRunnerDependencies) {
+	if (deps.isCanceled?.()) throw new Error('任务已取消');
 }
 
 function sleep(ms: number) {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { DEFAULT_SETTINGS } from '$lib/domain/settings';
+import { DEFAULT_SETTINGS, normalizeSettings } from '$lib/domain/settings';
 import { DEFAULT_PARAMS, type NativeJsonRequest } from '$lib/domain/types';
 import { runGalleryImageRequestGroup } from './gallery-runner';
 
@@ -92,5 +92,81 @@ describe('gallery runner', () => {
 		expect(partialUpdates).toEqual([['data:image/png;base64,partial']]);
 		expect(summary.images).toEqual(['data:image/png;base64,final']);
 		expect(summary.streamPartialImages).toEqual(['data:image/png;base64,partial']);
+	});
+
+	test('stops custom async polling when the task is canceled after submit', async () => {
+		const settings = normalizeSettings({
+			customProviders: [
+				{
+					id: 'custom-async',
+					name: 'Async',
+					submit: {
+						path: 'submit',
+						taskIdPath: 'data.task_id',
+						result: { b64JsonPaths: ['data.images.*.b64_json'] }
+					},
+					poll: {
+						path: 'tasks/{task_id}',
+						statusPath: 'data.status',
+						successValues: ['done'],
+						failureValues: ['failed'],
+						intervalSeconds: 1
+					}
+				}
+			],
+			profiles: [
+				{
+					...DEFAULT_SETTINGS.profiles[0],
+					id: 'custom-async-profile',
+					provider: 'custom-async',
+					baseUrl: 'https://async.example.com/v1',
+					apiKey: 'sk-test'
+				}
+			],
+			activeProfileId: 'custom-async-profile'
+		});
+		const sentUrls: string[] = [];
+		let canceled = false;
+		let message = '';
+
+		try {
+			await runGalleryImageRequestGroup({
+				taskId: 'task-async',
+				settings,
+				profile: settings.profiles[0],
+				prompt: 'a slow async render',
+				params: { ...DEFAULT_PARAMS, n: 1 },
+				inputImages: [],
+				mask: null,
+				createRequestId: () => `req-${sentUrls.length + 1}`,
+				nativeJsonRequest: async (request: NativeJsonRequest) => {
+					sentUrls.push(request.url);
+					if (request.url.endsWith('/submit')) {
+						canceled = true;
+						return { status: 200, headers: {}, body: { data: { task_id: 'job-1' } } };
+					}
+					throw new Error('poll should not be sent after cancellation');
+				},
+				nativeMultipartRequest: async () => {
+					throw new Error('multipart should not be used');
+				},
+				nativeJsonStreamRequest: async () => {
+					throw new Error('stream should not be used');
+				},
+				nativeMultipartStreamRequest: async () => {
+					throw new Error('multipart stream should not be used');
+				},
+				downloadImageAsDataUrl: async () => {
+					throw new Error('download should not be used');
+				},
+				onPartialImages: () => undefined,
+				isCanceled: () => canceled
+			});
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err);
+		}
+
+		expect(message).toBe('任务已取消');
+		expect(sentUrls).toEqual(['https://async.example.com/v1/submit']);
 	});
 });
