@@ -257,7 +257,10 @@
 	);
 	let canSubmit = $derived(Boolean(prompt.trim()) && !profileBlockReason);
 	let canSubmitAgent = $derived(Boolean(agentPrompt.trim()) && !agentBlockReason);
-	let tasksStorageBytes = $state(0);
+	let tasksStorageBytes = $state<number | null>(null);
+	let storageBytesRefreshTimer: number | null = null;
+	let storageBytesRefreshFrame: number | null = null;
+	let storageBytesRefreshIdle: number | null = null;
 	let activeAgentConversation = $derived(
 		agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ??
 			agentConversations[0] ??
@@ -313,6 +316,7 @@
 		return () => {
 			mounted = false;
 			window.clearInterval(timer);
+			cancelTasksStorageBytesRefresh();
 			taskPersistence.dispose();
 		};
 	});
@@ -1228,11 +1232,55 @@
 	}
 
 	function refreshTasksStorageBytes(nextTasks: TaskRecord[] = tasks) {
+		cancelTasksStorageBytesRefresh();
 		tasksStorageBytes = estimateTasksStorageBytes(nextTasks);
 	}
 
+	function cancelTasksStorageBytesRefresh() {
+		if (storageBytesRefreshFrame != null) {
+			window.cancelAnimationFrame(storageBytesRefreshFrame);
+			storageBytesRefreshFrame = null;
+		}
+		if (storageBytesRefreshTimer != null) {
+			window.clearTimeout(storageBytesRefreshTimer);
+			storageBytesRefreshTimer = null;
+		}
+		const idleWindow = window as Window & { cancelIdleCallback?: (handle: number) => void };
+		if (storageBytesRefreshIdle != null) {
+			idleWindow.cancelIdleCallback?.(storageBytesRefreshIdle);
+			storageBytesRefreshIdle = null;
+		}
+	}
+
+	function scheduleTasksStorageBytesRefresh() {
+		tasksStorageBytes = null;
+		cancelTasksStorageBytesRefresh();
+		const idleWindow = window as Window & {
+			requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+		};
+		const runRefresh = () => {
+			if (!showSettings) return;
+			refreshTasksStorageBytes();
+		};
+		storageBytesRefreshFrame = window.requestAnimationFrame(() => {
+			storageBytesRefreshFrame = null;
+			if (!showSettings) return;
+			if (idleWindow.requestIdleCallback) {
+				storageBytesRefreshIdle = idleWindow.requestIdleCallback(() => {
+					storageBytesRefreshIdle = null;
+					runRefresh();
+				}, { timeout: 1000 });
+				return;
+			}
+			storageBytesRefreshTimer = window.setTimeout(() => {
+				storageBytesRefreshTimer = null;
+				runRefresh();
+			}, 120);
+		});
+	}
+
 	function openSettings() {
-		refreshTasksStorageBytes();
+		tasksStorageBytes = null;
 		showSettings = true;
 	}
 
@@ -1943,6 +1991,7 @@
 		onImportTasks={importTasksFromFile}
 		onExportFullBackup={exportFullBackup}
 		onImportFullBackup={importFullBackupFromFile}
+		onRequestTasksStorageBytes={scheduleTasksStorageBytesRefresh}
 	/>
 	<SizePickerModal bind:open={showSizePicker} currentSize={params.size} onSelect={(size) => (params.size = size)} />
 	<TaskDetailModal

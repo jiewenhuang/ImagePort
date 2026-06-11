@@ -49,29 +49,32 @@
 		type ZipDownloadRoute
 	} from '$lib/domain/settings';
 	import SettingSwitch from './SettingSwitch.svelte';
+	import { formatStorageBytes, getStorageBytesTone, shouldRefreshStorageBytesForTab } from './gallery-settings-storage';
 
 	let {
 		open = $bindable(false),
 		settings = $bindable(),
 		tasks = [],
-		tasksStorageBytes = 0,
+		tasksStorageBytes = null,
 		onClearTasks,
 		onCleanupImages,
 		onExportTasks,
 		onImportTasks,
 		onExportFullBackup,
-		onImportFullBackup
+		onImportFullBackup,
+		onRequestTasksStorageBytes
 	}: {
 		open?: boolean;
 		settings: AppSettings;
 		tasks?: TaskRecord[];
-		tasksStorageBytes?: number;
+		tasksStorageBytes?: number | null;
 		onClearTasks: () => void;
 		onCleanupImages: () => Promise<CleanupImageFilesResult>;
 		onExportTasks: () => void;
 		onImportTasks: (file: File) => Promise<TaskImportSummary>;
 		onExportFullBackup: () => void;
 		onImportFullBackup: (file: File) => Promise<TaskImportSummary>;
+		onRequestTasksStorageBytes?: () => void;
 	} = $props();
 
 	let activeTab = $state<'general' | 'api' | 'agent' | 'data' | 'about'>('api');
@@ -110,6 +113,11 @@
 			.catch(() => {
 				appVersion = packageInfo.version;
 			});
+	});
+
+	$effect(() => {
+		if (!open || tasksStorageBytes != null || !shouldRefreshStorageBytesForTab(activeTab)) return;
+		onRequestTasksStorageBytes?.();
 	});
 
 	function close() {
@@ -374,17 +382,6 @@
 		} finally {
 			isCleaningImages = false;
 		}
-	}
-
-	function formatBytes(bytes: number) {
-		if (bytes < 1024) return `${bytes} B`;
-		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-		return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-	}
-
-	function getStorageTone(bytes: number) {
-		if (bytes >= 4 * 1024 * 1024) return 'text-amber-700';
-		return 'text-muted-foreground';
 	}
 
 	function getTabTitle() {
@@ -963,7 +960,7 @@
 									</div>
 									<div class="rounded-lg border bg-background/70 p-3">
 										<div class="text-muted-foreground">估算大小</div>
-										<div class="mt-1 font-medium">{formatBytes(tasksStorageBytes)}</div>
+										<div class="mt-1 font-medium">{formatStorageBytes(tasksStorageBytes)}</div>
 									</div>
 								</div>
 								<p class="text-muted-foreground mt-3 text-xs">
@@ -1021,8 +1018,8 @@
 										<p class="text-muted-foreground mt-1 text-xs">
 											导出当前 {tasks.length} 个任务，包含生成图片 data URL。
 										</p>
-										<p class={`mt-1 text-xs ${getStorageTone(tasksStorageBytes)}`}>
-											本地任务占用约 {formatBytes(tasksStorageBytes)}。图片较多时建议定期导出并清理。
+										<p class={`mt-1 text-xs ${getStorageBytesTone(tasksStorageBytes)}`}>
+											本地任务占用约 {formatStorageBytes(tasksStorageBytes)}。图片较多时建议定期导出并清理。
 										</p>
 									</div>
 									<Button onclick={onExportTasks} disabled={!tasks.length}>
@@ -1129,7 +1126,7 @@
 									</div>
 									<div class="rounded-lg border bg-background/70 p-3">
 										<div class="text-muted-foreground">存储估算</div>
-										<div class="mt-1 font-medium">{formatBytes(tasksStorageBytes)}</div>
+										<div class="mt-1 font-medium">{formatStorageBytes(tasksStorageBytes)}</div>
 									</div>
 									<div class="rounded-lg border bg-background/70 p-3">
 										<div class="text-muted-foreground">当前 API 模式</div>
