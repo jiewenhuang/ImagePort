@@ -2,14 +2,10 @@
 	import { onMount } from 'svelte';
 	import {
 		Download,
-		Eye,
 		Heart,
 		ImageIcon,
 		ImagePlus,
-		LoaderCircle,
-		MoreHorizontal,
 		MessagesSquare,
-		RotateCcw,
 		Search,
 		SendHorizontal,
 		Settings,
@@ -23,8 +19,6 @@
 	import { Select } from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { toast } from 'svelte-sonner';
 	import {
@@ -58,11 +52,22 @@
 	import {
 		filterGalleryTasks,
 		getSelectedCompletedTasks,
-		getTaskPreviewImages,
 		getVisibleGalleryTasks,
 		pruneSelectedTaskIds,
 		TASK_PAGE_SIZE
 	} from '$lib/domain/task-gallery';
+	import {
+		createDragSelectionBox,
+		getDragSelectedTaskIds,
+		getVisibleTaskIds,
+		invertVisibleTaskSelection as invertVisibleTaskIdsSelection,
+		moveDragSelectionBox,
+		normalizeSelectionRect,
+		toggleTaskIdSelection,
+		type DragSelectionBox
+	} from '$lib/domain/task-selection';
+	import { addTaskRequestId, takeTaskRequestIds, type ActiveTaskRequestIds } from '$lib/domain/task-lifecycle';
+	import { normalizeInputDraftSnapshot, readLocalStorageJson } from '$lib/domain/gallery-hydration';
 	import {
 		ALL_FAVORITES_COLLECTION_ID,
 		DEFAULT_FAVORITE_COLLECTION_ID,
@@ -109,12 +114,12 @@
 		loadStoredInputDraft,
 		loadStoredSettings,
 		saveStoredInputDraft,
-		saveStoredSettings,
-		type InputDraftSnapshot
+		saveStoredSettings
 	} from '$lib/storage/app-store';
 	import {
 		cleanupUnreferencedTaskImageFiles,
 		deleteTaskImageFiles,
+		deleteStoredTasks,
 		loadStoredAgentConversations,
 		loadStoredTasks,
 		saveStoredAgentConversations,
@@ -126,12 +131,13 @@
 	import { saveBlobToFile, saveDataUrlToFile } from '$lib/storage/native-download';
 	import GallerySettingsModal from './GallerySettingsModal.svelte';
 	import GalleryLightbox from './GalleryLightbox.svelte';
-	import ImageActionContextMenu from './ImageActionContextMenu.svelte';
 	import ImagePortLogo from '$lib/components/brand/ImagePortLogo.svelte';
 	import MaskEditorModal from './MaskEditorModal.svelte';
 	import ReferenceImageStrip from './ReferenceImageStrip.svelte';
 	import SizePickerModal from './SizePickerModal.svelte';
+	import TaskCard from './TaskCard.svelte';
 	import TaskDetailModal from './TaskDetailModal.svelte';
+	import TaskSelectionBar from './TaskSelectionBar.svelte';
 
 	const qualityOptions: TaskParams['quality'][] = ['auto', 'low', 'medium', 'high'];
 	const formatOptions: TaskParams['output_format'][] = ['png', 'jpeg', 'webp'];
@@ -155,6 +161,7 @@
 	let agentConversations = $state<AgentConversation[]>([]);
 	let activeAgentConversationId = $state<string | null>(null);
 	let canceledAgentRoundIds = $state<string[]>([]);
+	let activeGalleryRequestIds = $state<ActiveTaskRequestIds>({});
 	let activeAgentRequestIds = $state<Record<string, string>>({});
 	let nextGalleryProfileOverrideId = $state<string | null>(null);
 	let hasHydratedAgentConversations = $state(false);
@@ -168,7 +175,7 @@
 	let lastTaskFilterKey = $state('');
 	let selectionMode = $state(false);
 	let selectedTaskIds = $state<string[]>([]);
-	let selectionBox = $state<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
+	let selectionBox = $state<DragSelectionBox | null>(null);
 	let showBulkDeleteDialog = $state(false);
 	let showSettings = $state(false);
 	let showSizePicker = $state(false);
@@ -191,6 +198,7 @@
 		storageKey: TASKS_STORAGE_KEY,
 		saveTasks: saveStoredTasks,
 		saveTask: saveStoredTask,
+		deleteTasks: deleteStoredTasks,
 		getTasks: () => tasks,
 		onError(message) {
 			error = message;
@@ -240,7 +248,7 @@
 	);
 	let canSubmit = $derived(Boolean(prompt.trim()) && !profileBlockReason);
 	let canSubmitAgent = $derived(Boolean(agentPrompt.trim()) && !agentBlockReason);
-	let tasksStorageBytes = $derived(estimateTasksStorageBytes(tasks));
+	let tasksStorageBytes = $state(0);
 	let activeAgentConversation = $derived(
 		agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ??
 			agentConversations[0] ??
@@ -302,7 +310,7 @@
 
 	async function hydrateStorage(isMounted: () => boolean) {
 		try {
-			const saved = (await loadStoredSettings()) ?? readLocalStorageJson(SETTINGS_STORAGE_KEY);
+			const saved = (await loadStoredSettings()) ?? readLocalStorageJson(localStorage, SETTINGS_STORAGE_KEY);
 			if (saved) {
 				const nextSettings = normalizeSettings(saved);
 				if (isMounted()) settings = nextSettings;
@@ -314,14 +322,16 @@
 			if (isMounted()) hasHydratedSettings = true;
 		}
 		try {
-			const savedDraft = (await loadStoredInputDraft()) ?? readLocalStorageJson(INPUT_DRAFT_STORAGE_KEY);
+			const savedDraft = (await loadStoredInputDraft()) ?? readLocalStorageJson(localStorage, INPUT_DRAFT_STORAGE_KEY);
 			if (savedDraft && isMounted()) {
-				const parsed = savedDraft as Partial<InputDraftSnapshot>;
-				if (typeof parsed.prompt === 'string') prompt = parsed.prompt;
-				if (parsed.params && typeof parsed.params === 'object') params = { ...DEFAULT_PARAMS, ...parsed.params };
-				if (Array.isArray(parsed.inputImages)) inputImages = parsed.inputImages.filter(isInputImage);
-				if (parsed.mask && typeof parsed.mask === 'object') mask = parsed.mask as MaskDraft;
-				void saveStoredInputDraft({ prompt, params, inputImages, mask });
+				const parsed = normalizeInputDraftSnapshot(savedDraft);
+				if (parsed) {
+					if (typeof parsed.prompt === 'string') prompt = parsed.prompt;
+					if (parsed.params && typeof parsed.params === 'object') params = { ...DEFAULT_PARAMS, ...parsed.params };
+					if (parsed.inputImages) inputImages = parsed.inputImages;
+					if (parsed.mask) mask = parsed.mask;
+					void saveStoredInputDraft({ prompt, params, inputImages, mask });
+				}
 			}
 		} catch {
 			// Input draft persistence is best-effort.
@@ -331,7 +341,7 @@
 		let tasksHydrated = false;
 		try {
 			const storedTasks = await loadStoredTasks();
-			const savedTasks = resolveStoredTasks(storedTasks, readLocalStorageJson(TASKS_STORAGE_KEY));
+			const savedTasks = resolveStoredTasks(storedTasks, readLocalStorageJson(localStorage, TASKS_STORAGE_KEY));
 			if (savedTasks && isMounted()) {
 				const normalizedFavorites = normalizeTaskFavorites(
 					tasks.length ? mergeTaskSnapshots(tasks, savedTasks) : savedTasks
@@ -353,7 +363,8 @@
 		}
 		try {
 			const storedAgentConversations =
-				(await loadStoredAgentConversations()) ?? normalizeAgentConversations(readLocalStorageJson(AGENT_STORAGE_KEY));
+				(await loadStoredAgentConversations()) ??
+				normalizeAgentConversations(readLocalStorageJson(localStorage, AGENT_STORAGE_KEY));
 			if (isMounted()) {
 				agentConversations = storedAgentConversations.length ? storedAgentConversations : [createAgentConversation()];
 				activeAgentConversationId = agentConversations[0]?.id ?? null;
@@ -414,14 +425,14 @@
 		const submitProfile = effectiveGalleryProfile;
 		if (!submitProfile.apiKey.trim()) {
 			toast.warning('需要先配置 API Key');
-			showSettings = true;
+			openSettings();
 			return;
 		}
 		const blockReason = getProfileRequestBlockReason(submitProfile, settings);
 		if (blockReason) {
 			error = blockReason;
 			toast.warning('当前配置不可用', { description: blockReason });
-			showSettings = true;
+			openSettings();
 			return;
 		}
 
@@ -474,7 +485,7 @@
 		}
 		if (agentBlockReason) {
 			toast.warning('当前 Agent 配置不可用', { description: agentBlockReason });
-			showSettings = true;
+			openSettings();
 			return;
 		}
 		await startAgentRound({
@@ -612,9 +623,10 @@
 				nativeJsonStreamRequest,
 				nativeMultipartStreamRequest,
 				downloadImageAsDataUrl,
-				createRequestId: () => `${taskId}-${crypto.randomUUID()}`,
+				createRequestId: () => createGalleryRequestId(taskId),
 				onPartialImages: updateTaskPartialImages
 			});
+			if (!hasTask(taskId)) return;
 			const nextTasks: TaskRecord[] = tasks.map((task) =>
 				task.id === taskId
 					? {
@@ -645,6 +657,7 @@
 			}
 			notifyTaskCompleted(requestInput.prompt, result.images.length, requestInput.params.n);
 		} catch (err) {
+			if (!hasTask(taskId)) return;
 			const message = err instanceof Error ? err.message : String(err);
 			error = message;
 			toast.error('生成失败', { description: message });
@@ -662,6 +675,8 @@
 			tasks = nextTasks;
 			const updatedTask = nextTasks.find((task) => task.id === taskId);
 			if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
+		} finally {
+			releaseGalleryTaskRequests(taskId);
 		}
 	}
 
@@ -782,6 +797,7 @@
 	}
 
 	function updateTaskPartialImages(taskId: string, partialImages: string[]) {
+		if (!hasTask(taskId)) return;
 		const nextTasks: TaskRecord[] = tasks.map((task) =>
 			task.id === taskId
 				? {
@@ -792,6 +808,26 @@
 		);
 		tasks = nextTasks;
 		taskPersistence.persistTaskSnapshotSoon(taskId);
+	}
+
+	function hasTask(taskId: string) {
+		return tasks.some((task) => task.id === taskId);
+	}
+
+	function createGalleryRequestId(taskId: string) {
+		const requestId = `${taskId}-${crypto.randomUUID()}`;
+		activeGalleryRequestIds = addTaskRequestId(activeGalleryRequestIds, taskId, requestId);
+		return requestId;
+	}
+
+	function releaseGalleryTaskRequests(taskId: string) {
+		activeGalleryRequestIds = takeTaskRequestIds(activeGalleryRequestIds, [taskId]).activeRequestIds;
+	}
+
+	function cancelGalleryTaskRequests(taskIds: string[]) {
+		const result = takeTaskRequestIds(activeGalleryRequestIds, taskIds);
+		activeGalleryRequestIds = result.activeRequestIds;
+		for (const requestId of result.requestIds) void cancelNativeRequest(requestId).catch(() => undefined);
 	}
 
 	function buildActualParamsByImage(images: string[], actualParamsList: Array<Partial<TaskParams> | undefined>) {
@@ -1015,21 +1051,16 @@
 	}
 
 	function toggleTaskSelection(taskId: string) {
-		if (selectedTaskIds.includes(taskId)) {
-			selectedTaskIds = selectedTaskIds.filter((id) => id !== taskId);
-			return;
-		}
-		selectedTaskIds = [...selectedTaskIds, taskId];
+		selectedTaskIds = toggleTaskIdSelection(selectedTaskIds, taskId);
 	}
 
 	function selectAllVisibleTasks() {
-		selectedTaskIds = visibleTasks.map((task) => task.id);
+		selectedTaskIds = getVisibleTaskIds(visibleTasks);
 		selectionMode = selectedTaskIds.length > 0;
 	}
 
 	function invertVisibleTaskSelection() {
-		const selected = new Set(selectedTaskIds);
-		selectedTaskIds = visibleTasks.filter((task) => !selected.has(task.id)).map((task) => task.id);
+		selectedTaskIds = invertVisibleTaskIdsSelection(visibleTasks, selectedTaskIds);
 		selectionMode = selectedTaskIds.length > 0;
 	}
 
@@ -1042,21 +1073,18 @@
 		if (event.button !== 0) return;
 		const target = event.target as HTMLElement;
 		if (target.closest('[data-no-drag-select],button,input,textarea,select,a,[role="menuitem"]')) return;
-		selectionBox = { startX: event.clientX, startY: event.clientY, currentX: event.clientX, currentY: event.clientY };
+		selectionBox = createDragSelectionBox(event.clientX, event.clientY);
 		selectionMode = true;
 	}
 
 	function moveDragSelection(event: PointerEvent) {
 		if (!selectionBox) return;
-		selectionBox = { ...selectionBox, currentX: event.clientX, currentY: event.clientY };
+		selectionBox = moveDragSelectionBox(selectionBox, event.clientX, event.clientY);
 		const rect = normalizeSelectionRect(selectionBox);
-		const selected = visibleTasks
-			.filter((task) => {
-				const element = document.querySelector(`[data-task-card-id="${task.id}"]`);
-				return element instanceof HTMLElement && rectsIntersect(rect, element.getBoundingClientRect());
-			})
-			.map((task) => task.id);
-		selectedTaskIds = selected;
+		selectedTaskIds = getDragSelectedTaskIds(visibleTasks, rect, (taskId) => {
+			const element = document.querySelector(`[data-task-card-id="${taskId}"]`);
+			return element instanceof HTMLElement ? element.getBoundingClientRect() : null;
+		});
 	}
 
 	function stopDragSelection() {
@@ -1065,39 +1093,22 @@
 		selectionMode = selectedTaskIds.length > 0;
 	}
 
-	function normalizeSelectionRect(box: { startX: number; startY: number; currentX: number; currentY: number }) {
-		const left = Math.min(box.startX, box.currentX);
-		const top = Math.min(box.startY, box.currentY);
-		const right = Math.max(box.startX, box.currentX);
-		const bottom = Math.max(box.startY, box.currentY);
-		return { left, top, right, bottom, width: right - left, height: bottom - top };
-	}
-
-	function rectsIntersect(a: DOMRect | ReturnType<typeof normalizeSelectionRect>, b: DOMRect) {
-		return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-	}
-
-	async function removeSelectedTasks() {
+	function removeSelectedTasks() {
 		const selectedIds = new Set(selectedTaskIds);
 		const tasksToRemove = tasks.filter((task) => selectedIds.has(task.id));
 		if (!tasksToRemove.length) return;
 		const nextTasks = tasks.filter((task) => !selectedIds.has(task.id));
 		tasks = nextTasks;
+		cancelGalleryTaskRequests(tasksToRemove.map((task) => task.id));
 		if (selectedTaskId && selectedIds.has(selectedTaskId)) {
 			selectedTaskId = null;
 			showTaskDetail = false;
 		}
 		showBulkDeleteDialog = false;
 		clearTaskSelection();
-		void taskPersistence.persistTasksSnapshot(nextTasks, { allowEmpty: true });
-		const failedImageCleanupCount = await deleteTaskImageFilesWithReport(tasksToRemove, deleteTaskImageFiles);
-		if (failedImageCleanupCount) {
-			toast.warning('已删除所选任务', {
-				description: `${tasksToRemove.length} 个任务已移除，${failedImageCleanupCount} 个任务的图片文件清理失败`
-			});
-		} else {
-			toast.success('已删除所选任务', { description: `${tasksToRemove.length} 个任务已移除` });
-		}
+		void taskPersistence.deleteTaskSnapshots(tasksToRemove.map((task) => task.id));
+		toast.success('已删除所选任务', { description: `${tasksToRemove.length} 个任务已移除` });
+		cleanupDeletedTaskImages(tasksToRemove, (failedCount) => `${failedCount} 个任务的图片文件清理失败`);
 	}
 
 	function isZipRouteEnabled(route: AppSettings['zipDownloadRoutes'][number]) {
@@ -1144,23 +1155,20 @@
 		saveTasksZip(roundTasks, fileName, '这个 Agent 轮次没有可下载的图片');
 	}
 
-	async function removeTask(taskId: string) {
+	function removeTask(taskId: string) {
 		const taskToRemove = tasks.find((task) => task.id === taskId);
 		const nextTasks = tasks.filter((task) => task.id !== taskId);
 		tasks = nextTasks;
+		cancelGalleryTaskRequests([taskId]);
 		selectedTaskIds = selectedTaskIds.filter((id) => id !== taskId);
 		if (selectedTaskId === taskId) {
 			selectedTaskId = null;
 			showTaskDetail = false;
 		}
-		void taskPersistence.persistTasksSnapshot(nextTasks, { allowEmpty: true });
-		const failedImageCleanupCount = taskToRemove
-			? await deleteTaskImageFilesWithReport([taskToRemove], deleteTaskImageFiles)
-			: 0;
-		if (failedImageCleanupCount) {
-			toast.warning('任务已删除', { description: '关联图片文件清理失败，可稍后在设置中清理无引用图片' });
-		} else {
-			toast.success('任务已删除');
+		void taskPersistence.deleteTaskSnapshots([taskId]);
+		toast.success('任务已删除');
+		if (taskToRemove) {
+			cleanupDeletedTaskImages([taskToRemove], () => '关联图片文件清理失败，可稍后在设置中清理无引用图片');
 		}
 	}
 
@@ -1187,6 +1195,33 @@
 		showLightbox = true;
 	}
 
+	function getTaskPrimaryImage(task: TaskRecord) {
+		return task.images[0] ?? task.streamPartialImageIds[0] ?? null;
+	}
+
+	function openTaskCardPreview(task: TaskRecord) {
+		if (task.images[0]) {
+			openTaskLightbox(task, 0);
+			return;
+		}
+		openImagesLightbox(task.streamPartialImageIds, 0, `${task.prompt} partial`, task.id);
+	}
+
+	function downloadTaskPrimaryImage(task: TaskRecord) {
+		const image = getTaskPrimaryImage(task);
+		if (image) downloadImage(image, task, 0);
+	}
+
+	function copyTaskPrimaryImage(task: TaskRecord) {
+		const image = getTaskPrimaryImage(task);
+		if (image) void copyImage(image);
+	}
+
+	function useTaskPrimaryImageAsReference(task: TaskRecord) {
+		const image = getTaskPrimaryImage(task);
+		if (image) void addDataUrlAsReference(image, `partial-${task.id}-1.png`);
+	}
+
 	function openTaskInputLightbox(task: TaskRecord, imageIndex: number) {
 		const images = task.inputImages.map((image) => image.dataUrl);
 		openImagesLightbox(images, imageIndex, `${task.prompt} 输入图`, null);
@@ -1195,6 +1230,15 @@
 	function clearPrompt() {
 		if (appMode === 'agent') agentPrompt = '';
 		else prompt = '';
+	}
+
+	function refreshTasksStorageBytes(nextTasks: TaskRecord[] = tasks) {
+		tasksStorageBytes = estimateTasksStorageBytes(nextTasks);
+	}
+
+	function openSettings() {
+		refreshTasksStorageBytes();
+		showSettings = true;
 	}
 
 	function loadMoreTasks() {
@@ -1302,15 +1346,6 @@
 		params.output_compression = Number.isFinite(numeric) ? Math.min(100, Math.max(0, Math.trunc(numeric))) : null;
 	}
 
-	function isInputImage(value: unknown): value is InputImage {
-		return (
-			Boolean(value) &&
-			typeof value === 'object' &&
-			typeof (value as InputImage).id === 'string' &&
-			typeof (value as InputImage).dataUrl === 'string'
-		);
-	}
-
 	function notifyTaskCompleted(taskPrompt: string, actualCount: number, expectedCount: OutputImageCount) {
 		if (!settings.taskCompletionNotification || typeof Notification === 'undefined') return;
 		if (Notification.permission !== 'granted') return;
@@ -1408,22 +1443,32 @@
 		mask = null;
 	}
 
-	async function clearTasks() {
+	function clearTasks() {
 		const tasksToClear = tasks;
 		tasks = [];
+		refreshTasksStorageBytes([]);
+		cancelGalleryTaskRequests(tasksToClear.map((task) => task.id));
 		clearTaskSelection();
 		selectedTaskId = null;
 		showTaskDetail = false;
 		localStorage.removeItem(TASKS_STORAGE_KEY);
-		void taskPersistence.persistTasksSnapshot([], { allowEmpty: true });
-		const failedImageCleanupCount = await deleteTaskImageFilesWithReport(tasksToClear, deleteTaskImageFiles);
-		if (failedImageCleanupCount) {
-			toast.warning('任务已清空', {
-				description: `${tasksToClear.length} 个任务已移除，${failedImageCleanupCount} 个任务的图片文件清理失败`
+		void taskPersistence.deleteTaskSnapshots(tasksToClear.map((task) => task.id));
+		toast.success('任务已清空', { description: `${tasksToClear.length} 个任务已移除` });
+		cleanupDeletedTaskImages(tasksToClear, (failedCount) => `${failedCount} 个任务的图片文件清理失败`);
+	}
+
+	function cleanupDeletedTaskImages(
+		tasksToCleanup: TaskRecord[],
+		getFailureDescription: (failedCount: number) => string
+	) {
+		if (!tasksToCleanup.length) return;
+		void deleteTaskImageFilesWithReport(tasksToCleanup, deleteTaskImageFiles)
+			.then((failedCount) => {
+				if (failedCount) toast.warning('图片文件清理失败', { description: getFailureDescription(failedCount) });
+			})
+			.catch((err) => {
+				toast.warning('图片文件清理失败', { description: err instanceof Error ? err.message : String(err) });
 			});
-		} else {
-			toast.success('任务已清空', { description: `${tasksToClear.length} 个任务已移除` });
-		}
 	}
 
 	async function cleanupImages() {
@@ -1466,6 +1511,7 @@
 		const imported = parseImportedTasks(await file.text());
 		const summary = createTaskImportSummary(tasks, imported);
 		tasks = summary.tasks;
+		refreshTasksStorageBytes(summary.tasks);
 		await taskPersistence.persistTasksSnapshot(summary.tasks);
 		toast.success('任务已导入', {
 			description: `新增 ${summary.addedCount} 个，跳过 ${summary.skippedDuplicateCount} 个重复任务`
@@ -1495,6 +1541,7 @@
 		}
 		const summary = createTaskImportSummary(tasks, restoredTasks);
 		tasks = summary.tasks;
+		refreshTasksStorageBytes(summary.tasks);
 		await taskPersistence.persistTasksSnapshot(summary.tasks);
 		toast.success('完整备份已恢复', {
 			description: `新增 ${summary.addedCount} 个任务，跳过 ${summary.skippedDuplicateCount} 个重复任务`
@@ -1504,12 +1551,6 @@
 
 	function saveMask(nextMask: MaskDraft) {
 		mask = nextMask;
-	}
-
-	function readLocalStorageJson(key: string): unknown | null {
-		const value = localStorage.getItem(key);
-		if (!value) return null;
-		return JSON.parse(value) as unknown;
 	}
 
 	function downloadImage(src: string, task: TaskRecord, index: number) {
@@ -1642,7 +1683,7 @@
 						Agent
 					</Button>
 				</div>
-				<Button variant="ghost" size="icon-sm" onclick={() => (showSettings = true)} aria-label="设置">
+				<Button variant="ghost" size="icon-sm" onclick={openSettings} aria-label="设置">
 					<Settings class="size-4" />
 				</Button>
 			</div>
@@ -1788,68 +1829,18 @@
 					</div>
 
 					{#if selectionMode || selectedTaskIds.length > 0}
-						<div
-							class="border-border bg-card mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2 shadow-xs"
-						>
-							<div class="flex min-w-0 items-center gap-2 text-sm">
-								<CheckSquare class="text-primary size-4" />
-								<span class="font-medium">已选 {selectedTaskIds.length} 个任务</span>
-								<Badge variant="secondary">可下载 {selectedDownloadableTasks.length}</Badge>
-							</div>
-							<div class="flex flex-wrap items-center gap-2">
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									onclick={selectAllVisibleTasks}
-									disabled={!visibleTasks.length}
-								>
-									全选当前
-								</Button>
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									onclick={invertVisibleTaskSelection}
-									disabled={!visibleTasks.length}
-								>
-									反选
-								</Button>
-								{#if isZipRouteEnabled('task-selection')}
-									<Button
-										type="button"
-										variant="outline"
-										size="sm"
-										onclick={downloadSelectedTasksZip}
-										disabled={!selectedDownloadableTasks.length}
-									>
-										<Download class="size-4" />
-										ZIP 下载
-									</Button>
-								{/if}
-								<AlertDialog.Root bind:open={showBulkDeleteDialog}>
-									<AlertDialog.Trigger>
-										<Button type="button" variant="destructive" size="sm" disabled={!selectedTaskIds.length}>
-											<Trash2 class="size-4" />
-											删除
-										</Button>
-									</AlertDialog.Trigger>
-									<AlertDialog.Content>
-										<AlertDialog.Header>
-											<AlertDialog.Title>删除所选任务？</AlertDialog.Title>
-											<AlertDialog.Description>
-												将删除 {selectedTaskIds.length} 个任务及其本地图片文件。此操作不可恢复。
-											</AlertDialog.Description>
-										</AlertDialog.Header>
-										<AlertDialog.Footer>
-											<AlertDialog.Cancel>取消</AlertDialog.Cancel>
-											<AlertDialog.Action onclick={removeSelectedTasks}>确认删除</AlertDialog.Action>
-										</AlertDialog.Footer>
-									</AlertDialog.Content>
-								</AlertDialog.Root>
-								<Button type="button" variant="ghost" size="sm" onclick={clearTaskSelection}>取消</Button>
-							</div>
-						</div>
+						<TaskSelectionBar
+							selectedCount={selectedTaskIds.length}
+							downloadableCount={selectedDownloadableTasks.length}
+							visibleCount={visibleTasks.length}
+							canDownloadZip={isZipRouteEnabled('task-selection')}
+							bind:deleteDialogOpen={showBulkDeleteDialog}
+							onSelectAll={selectAllVisibleTasks}
+							onInvert={invertVisibleTaskSelection}
+							onDownloadZip={downloadSelectedTasksZip}
+							onDeleteSelected={removeSelectedTasks}
+							onClear={clearTaskSelection}
+						/>
 					{/if}
 				</div>
 
@@ -1870,222 +1861,35 @@
 				{:else}
 					<section class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
 						{#each visibleTasks as task}
-							{@const previewImages = task.images.length
-								? getTaskPreviewImages(task)
-								: task.streamPartialImageIds.slice(-4)}
-							{@const isSelected = selectedTaskIds.includes(task.id)}
-							<article
-								data-task-card-id={task.id}
-								class={`border-border bg-card group overflow-hidden rounded-lg border shadow-xs ${isSelected ? 'border-primary ring-ring ring-2' : ''}`}
-							>
-								<div class="bg-muted relative aspect-square w-full overflow-hidden">
-									{#if task.images[0] || task.streamPartialImageIds[0]}
-										<ImageActionContextMenu
-											canDownloadAll={getTaskDownloadableImageCount(task) > 1}
-											canUseAsReference
-											canEditMask={Boolean(task.images[0])}
-											onOpen={() =>
-												task.images[0]
-													? openTaskLightbox(task, 0)
-													: openImagesLightbox(task.streamPartialImageIds, 0, `${task.prompt} partial`, task.id)}
-											onDownload={() => downloadImage(task.images[0] ?? task.streamPartialImageIds[0], task, 0)}
-											onDownloadAll={() => downloadTaskZip(task)}
-											onCopy={() => copyImage(task.images[0] ?? task.streamPartialImageIds[0])}
-											onUseAsReference={() =>
-												void addDataUrlAsReference(
-													task.images[0] ?? task.streamPartialImageIds[0],
-													`partial-${task.id}-1.png`
-												)}
-											onEditMask={() => (task.images[0] ? void editOutputWithMask(task, 0) : undefined)}
-										>
-											<button
-												type="button"
-												class="absolute inset-0 z-[1] block w-full text-left"
-												onclick={() => openTask(task)}
-												aria-label="打开任务详情"
-											></button>
-										</ImageActionContextMenu>
-									{:else}
-										<button
-											type="button"
-											class="absolute inset-0 z-[1] block w-full text-left"
-											onclick={() => openTask(task)}
-											aria-label="打开任务详情"
-										></button>
-									{/if}
-									<div class="absolute top-2 left-2 z-10 flex items-center gap-1.5">
-										<div
-											class={`flex size-7 items-center justify-center rounded-full border shadow-sm backdrop-blur transition ${isSelected ? 'border-primary bg-primary text-primary-foreground' : 'border-white/60 bg-black/45 text-white hover:bg-black/65'}`}
-										>
-											<Checkbox
-												checked={isSelected}
-												class="border-white/70 bg-transparent data-checked:border-primary-foreground data-checked:bg-primary-foreground data-checked:text-primary"
-												aria-label={isSelected ? '取消选择任务' : '选择任务'}
-												onclick={(event) => {
-													event.stopPropagation();
-													selectionMode = true;
-													toggleTaskSelection(task.id);
-												}}
-											/>
-										</div>
-										<button
-											type="button"
-											class={`flex size-7 items-center justify-center rounded-full border shadow-sm backdrop-blur transition ${task.isFavorite ? 'border-rose-200 bg-rose-50 text-rose-600' : 'border-white/60 bg-black/45 text-white hover:bg-black/65'}`}
-											onclick={(event) => {
-												event.stopPropagation();
-												toggleTaskFavorite(task.id);
-											}}
-											aria-label={task.isFavorite ? '取消收藏' : '收藏任务'}
-										>
-											<Heart class={`size-4 ${task.isFavorite ? 'fill-current' : ''}`} />
-										</button>
-									</div>
-									{#if task.status === 'running' && !previewImages.length}
-										<div class="absolute inset-0 flex flex-col items-center justify-center gap-3">
-											<LoaderCircle class="text-muted-foreground size-6 animate-spin" />
-											<span class="text-muted-foreground text-sm"
-												>生成中 · {formatDuration(getTaskElapsedMs(task))}</span
-											>
-											<span class="text-muted-foreground text-xs">预计 {formatExpectedImageCount(task.params.n)}</span>
-										</div>
-									{:else if task.status === 'running' && previewImages.length}
-										<img
-											class="h-full w-full object-cover opacity-90 transition-transform duration-300 group-hover:scale-[1.02]"
-											src={previewImages.at(-1)}
-											alt={`${task.prompt} partial`}
-										/>
-										<div
-											class="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/65 to-transparent p-3 pt-8 text-xs text-white"
-										>
-											生成中 · partial {task.streamPartialImageIds.length} 张
-										</div>
-									{:else if previewImages.length === 1}
-										<img
-											class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
-											src={previewImages[0]}
-											alt={task.prompt}
-										/>
-									{:else if previewImages.length > 1}
-										<div class="grid h-full w-full grid-cols-2 gap-1 p-1">
-											{#each previewImages.slice(0, 4) as image, index}
-												<div class="relative overflow-hidden rounded-md">
-													<img class="h-full w-full object-cover" src={image} alt={`${task.prompt} ${index + 1}`} />
-													{#if index === 3 && previewImages.length > 4}
-														<div
-															class="absolute inset-0 flex items-center justify-center bg-black/50 text-sm font-semibold text-white"
-														>
-															+{previewImages.length - 4}
-														</div>
-													{/if}
-												</div>
-											{/each}
-										</div>
-									{:else}
-										<div
-											class="text-muted-foreground absolute inset-0 flex items-center justify-center px-4 text-center text-sm"
-										>
-											{task.error ?? '没有图片'}
-										</div>
-									{/if}
-									<span
-										class={`absolute top-2 right-2 rounded-full border px-2 py-0.5 text-xs ${getStatusClass(task.status)}`}
-									>
-										{getStatusLabel(task.status)}
-									</span>
-									{#if task.status !== 'running'}
-										<span class="absolute right-2 bottom-2 rounded-full bg-black/60 px-2 py-0.5 text-xs text-white"
-											>{formatImageCountRatio(task.images.length, task.params.n)}</span
-										>
-									{/if}
-									{#if task.inputImages.length}
-										<span class="absolute bottom-2 left-2 rounded-full bg-black/60 px-2 py-0.5 text-xs text-white"
-											>参考图 {task.inputImages.length}</span
-										>
-									{/if}
-								</div>
-								<div class="space-y-3 p-3">
-									<div>
-										<p class="line-clamp-2 text-sm font-medium">{task.prompt}</p>
-										<p class="text-muted-foreground mt-1 text-xs">
-											{task.params.size} · {task.params.quality} · {task.params.output_format} · {formatTaskTime(
-												task.createdAt
-											)}
-										</p>
-										<p class="text-muted-foreground mt-1 text-xs">{getTaskProgressText(task)}</p>
-										{#if task.error && task.status !== 'error'}
-											<p class="mt-1 line-clamp-2 text-xs text-amber-700">{task.error}</p>
-										{/if}
-									</div>
-									<div class="grid grid-cols-4 gap-2">
-										<Button
-											variant="outline"
-											size="xs"
-											onclick={() => openTask(task)}
-											disabled={!task.images.length && !task.streamPartialImageIds.length}
-										>
-											<Eye class="size-3" />
-											查看
-										</Button>
-										<Button variant="outline" size="xs" onclick={() => retryTask(task)}>
-											<RotateCcw class="size-3" />
-											复用
-										</Button>
-										<Button
-											variant="ghost"
-											size="xs"
-											onclick={() =>
-												(task.images[0] || task.streamPartialImageIds[0]) &&
-												downloadImage(task.images[0] ?? task.streamPartialImageIds[0], task, 0)}
-											disabled={!task.images[0] && !task.streamPartialImageIds[0]}
-										>
-											<Download class="size-3" />
-											下载
-										</Button>
-										<DropdownMenu.Root>
-											<DropdownMenu.Trigger>
-												<Button variant="ghost" size="xs">
-													<MoreHorizontal class="size-3" />
-													更多
-												</Button>
-											</DropdownMenu.Trigger>
-											<DropdownMenu.Content align="end" class="w-44">
-												<DropdownMenu.Item
-													onclick={() => openTask(task)}
-													disabled={!task.images.length && !task.streamPartialImageIds.length}
-												>
-													<Eye class="size-4" />
-													查看详情
-												</DropdownMenu.Item>
-												<DropdownMenu.Item onclick={() => toggleTaskFavorite(task.id)}>
-													<Heart class={`size-4 ${task.isFavorite ? 'fill-current text-rose-600' : ''}`} />
-													{task.isFavorite ? '取消收藏' : '收藏任务'}
-												</DropdownMenu.Item>
-												{#if isZipRouteEnabled('task-card')}
-													<DropdownMenu.Item
-														onclick={() => downloadTaskZip(task)}
-														disabled={!task.images.length && !task.streamPartialImageIds.length}
-													>
-														<Download class="size-4" />
-														下载全部 ZIP
-													</DropdownMenu.Item>
-												{/if}
-												<DropdownMenu.Item
-													onclick={() => void useOutputAsReference(task, 0)}
-													disabled={!task.images[0]}
-												>
-													<ImagePlus class="size-4" />
-													首图作参考
-												</DropdownMenu.Item>
-												<DropdownMenu.Separator />
-												<DropdownMenu.Item variant="destructive" onclick={() => removeTask(task.id)}>
-													<Trash2 class="size-4" />
-													删除任务
-												</DropdownMenu.Item>
-											</DropdownMenu.Content>
-										</DropdownMenu.Root>
-									</div>
-								</div>
-							</article>
+							<TaskCard
+								{task}
+								isSelected={selectedTaskIds.includes(task.id)}
+								canDownloadZip={isZipRouteEnabled('task-card')}
+								onOpen={openTask}
+								onOpenPreview={openTaskCardPreview}
+								onSelect={(taskId) => {
+									selectionMode = true;
+									toggleTaskSelection(taskId);
+								}}
+								onToggleFavorite={toggleTaskFavorite}
+								onRetry={retryTask}
+								onDownloadPrimary={downloadTaskPrimaryImage}
+								onDownloadAll={downloadTaskZip}
+								onCopyPrimary={copyTaskPrimaryImage}
+								onUsePrimaryReference={useTaskPrimaryImageAsReference}
+								onUseFirstOutputReference={(task) => useOutputAsReference(task, 0)}
+								onEditMask={(task) => editOutputWithMask(task, 0)}
+								onDelete={removeTask}
+								{formatDuration}
+								{formatExpectedImageCount}
+								{formatImageCountRatio}
+								{formatTaskTime}
+								{getTaskDownloadableImageCount}
+								{getTaskElapsedMs}
+								{getTaskProgressText}
+								{getStatusClass}
+								{getStatusLabel}
+							/>
 						{/each}
 					</section>
 					{#if hasMoreTasks}

@@ -5,6 +5,7 @@ export interface TaskPersistenceControllerOptions {
 	storageKey: string;
 	saveTasks: (tasks: TaskRecord[], options?: TaskSnapshotPersistenceOptions) => Promise<boolean>;
 	saveTask: (task: TaskRecord) => Promise<boolean>;
+	deleteTasks?: (taskIds: string[]) => Promise<boolean>;
 	getTasks: () => TaskRecord[];
 	localStorage?: Pick<Storage, 'removeItem' | 'setItem'>;
 	setTimeout?: (callback: () => void, timeout: number) => ReturnType<typeof window.setTimeout>;
@@ -18,6 +19,7 @@ export interface TaskPersistenceController {
 	persistTaskSnapshot(task: TaskRecord): Promise<boolean>;
 	persistTaskSnapshotSoon(taskId: string): void;
 	persistTaskSnapshotNow(task: TaskRecord): Promise<boolean>;
+	deleteTaskSnapshots(taskIds: string[]): Promise<boolean>;
 	dispose(): void;
 }
 
@@ -68,6 +70,33 @@ export function createTaskPersistenceController(options: TaskPersistenceControll
 		}
 	}
 
+	async function deleteTaskSnapshots(taskIds: string[]) {
+		const ids = [...new Set(taskIds.filter((id) => id.trim().length > 0))];
+		if (!ids.length) return true;
+		for (const id of ids) {
+			const previousTimer = timers.get(id);
+			if (previousTimer != null) {
+				clearTimer(previousTimer);
+				timers.delete(id);
+			}
+		}
+		try {
+			const deletedFromDatabase = options.deleteTasks ? await options.deleteTasks(ids) : false;
+			if (deletedFromDatabase) {
+				fallbackStorage.removeItem(options.storageKey);
+				return true;
+			}
+			const tasks = options.getTasks();
+			fallbackStorage.setItem(options.storageKey, JSON.stringify(tasks));
+			return false;
+		} catch (err) {
+			reportError(err);
+			const tasks = options.getTasks();
+			fallbackStorage.setItem(options.storageKey, JSON.stringify(tasks));
+			return false;
+		}
+	}
+
 	function persistTaskSnapshotSoon(taskId: string) {
 		const previousTimer = timers.get(taskId);
 		if (previousTimer != null) clearTimer(previousTimer);
@@ -98,6 +127,7 @@ export function createTaskPersistenceController(options: TaskPersistenceControll
 		persistTaskSnapshot,
 		persistTaskSnapshotSoon,
 		persistTaskSnapshotNow,
+		deleteTaskSnapshots,
 		dispose
 	};
 }

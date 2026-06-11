@@ -4,6 +4,7 @@ import {
 	cleanupUnreferencedTaskImageFiles,
 	createFileBackedTaskPayload,
 	createAgentConversationRow,
+	deleteTaskRows,
 	hydrateFileBackedTaskPayload,
 	parseTaskPayload,
 	serializeTaskRow,
@@ -63,6 +64,26 @@ describe('gallery db row helpers', () => {
 		expect(calls[0].sql.includes('DELETE')).toBe(false);
 		expect(calls[0].values?.[0]).toBe('task-1');
 		expect(JSON.parse(String(calls[0].values?.[5]))).toEqual({ payload: true });
+	});
+
+	test('deletes only requested task rows by id', async () => {
+		const calls: Array<{ sql: string; values?: unknown[] }> = [];
+
+		await deleteTaskRows(
+			{
+				async execute(sql, values) {
+					calls.push({ sql, values });
+				}
+			},
+			['task-1', 'task-3']
+		);
+
+		expect(calls).toEqual([
+			{
+				sql: 'DELETE FROM gallery_tasks WHERE id IN ($1, $2)',
+				values: ['task-1', 'task-3']
+			}
+		]);
 	});
 });
 

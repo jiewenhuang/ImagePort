@@ -99,6 +99,128 @@ describe('task persistence controller', () => {
 		expect(errors).toEqual(['任务保存失败：disk full']);
 	});
 
+	test('deletes task snapshots through database storage and clears stale fallback storage', async () => {
+		const fallback = createMemoryLocalStorage();
+		fallback.setItem('tasks', 'stale');
+		const deletedIds: string[][] = [];
+		const currentTasks = [task({ id: 'task-2' })];
+		const controller = createTaskPersistenceController({
+			storageKey: 'tasks',
+			localStorage: fallback,
+			getTasks: () => currentTasks,
+			async saveTasks() {
+				return false;
+			},
+			async saveTask() {
+				return false;
+			},
+			async deleteTasks(ids) {
+				deletedIds.push(ids);
+				return true;
+			}
+		});
+
+		const deleted = await controller.deleteTaskSnapshots(['task-1']);
+
+		expect(deleted).toBe(true);
+		expect(deletedIds).toEqual([['task-1']]);
+		expect(fallback.values.has('tasks')).toBe(false);
+	});
+
+	test('falls back to current task snapshots when task deletion storage is unavailable', async () => {
+		const fallback = createMemoryLocalStorage();
+		const currentTasks = [task({ id: 'task-2' })];
+		const controller = createTaskPersistenceController({
+			storageKey: 'tasks',
+			localStorage: fallback,
+			getTasks: () => currentTasks,
+			async saveTasks() {
+				return false;
+			},
+			async saveTask() {
+				return false;
+			},
+			async deleteTasks() {
+				return false;
+			}
+		});
+
+		const deleted = await controller.deleteTaskSnapshots(['task-1']);
+
+		expect(deleted).toBe(false);
+		expect(JSON.parse(fallback.values.get('tasks') ?? '[]').map((item: TaskRecord) => item.id)).toEqual(['task-2']);
+	});
+
+	test('falls back to current task snapshots when task deletion throws', async () => {
+		const fallback = createMemoryLocalStorage();
+		const errors: string[] = [];
+		const currentTasks = [task({ id: 'task-2' })];
+		const controller = createTaskPersistenceController({
+			storageKey: 'tasks',
+			localStorage: fallback,
+			getTasks: () => currentTasks,
+			async saveTasks() {
+				return false;
+			},
+			async saveTask() {
+				return false;
+			},
+			async deleteTasks() {
+				throw new Error('database locked');
+			},
+			onError(message) {
+				errors.push(message);
+			}
+		});
+
+		const deleted = await controller.deleteTaskSnapshots(['task-1']);
+
+		expect(deleted).toBe(false);
+		expect(JSON.parse(fallback.values.get('tasks') ?? '[]').map((item: TaskRecord) => item.id)).toEqual(['task-2']);
+		expect(errors).toEqual(['任务保存失败：database locked']);
+	});
+
+	test('clears pending debounced saves for deleted task snapshots', async () => {
+		const clearedTimers: number[] = [];
+		const savedTaskIds: string[] = [];
+		let currentTasks: TaskRecord[] = [task({ id: 'task-1' })];
+		let nextTimerId = 1;
+		const timers = new Map<number, () => void>();
+		const controller = createTaskPersistenceController({
+			storageKey: 'tasks',
+			localStorage: createMemoryLocalStorage(),
+			getTasks: () => currentTasks,
+			async saveTasks() {
+				return false;
+			},
+			async saveTask(savedTask) {
+				savedTaskIds.push(savedTask.id);
+				return true;
+			},
+			async deleteTasks() {
+				return true;
+			},
+			setTimeout(callback) {
+				const timerId = nextTimerId;
+				nextTimerId += 1;
+				timers.set(timerId, callback as () => void);
+				return timerId as unknown as ReturnType<typeof setTimeout>;
+			},
+			clearTimeout(timerId) {
+				clearedTimers.push(timerId as unknown as number);
+				timers.delete(timerId as unknown as number);
+			}
+		});
+
+		controller.persistTaskSnapshotSoon('task-1');
+		currentTasks = [];
+		await controller.deleteTaskSnapshots(['task-1']);
+		timers.get(1)?.();
+
+		expect(clearedTimers).toEqual([1]);
+		expect(savedTaskIds).toEqual([]);
+	});
+
 	test('debounces partial task saves and persists the latest task state', () => {
 		const savedStatuses: string[] = [];
 		const clearedTimers: number[] = [];

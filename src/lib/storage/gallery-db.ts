@@ -141,6 +141,13 @@ export async function saveStoredTask(task: TaskRecord): Promise<boolean> {
 	return saveQueue;
 }
 
+export async function deleteStoredTasks(taskIds: string[]): Promise<boolean> {
+	const ids = [...new Set(taskIds.filter((id) => id.trim().length > 0))];
+	if (!ids.length) return true;
+	saveQueue = saveQueue.catch(() => true).then(() => deleteStoredTasksNow(ids));
+	return saveQueue;
+}
+
 async function saveStoredTasksNow(normalizedTasks: TaskRecord[]): Promise<boolean> {
 	const db = await getGalleryDb();
 	if (!db) return false;
@@ -170,6 +177,13 @@ async function saveStoredTaskNow(normalizedTask: TaskRecord): Promise<boolean> {
 	if (!db) return false;
 	const payload = await createFileBackedTaskPayload(normalizedTask, tauriImageFileStore);
 	await upsertTaskRow(db, normalizedTask, payload);
+	return true;
+}
+
+async function deleteStoredTasksNow(taskIds: string[]): Promise<boolean> {
+	const db = await getGalleryDb();
+	if (!db) return false;
+	await deleteTaskRows(db, taskIds);
 	return true;
 }
 
@@ -244,6 +258,13 @@ export async function upsertTaskRow(db: GalleryDbExecutor, task: TaskRecord, pay
 			updated_at = excluded.updated_at`,
 		serializeTaskRow(task, payload)
 	);
+}
+
+export async function deleteTaskRows(db: GalleryDbExecutor, taskIds: string[]): Promise<void> {
+	const ids = [...new Set(taskIds.filter((id) => id.trim().length > 0))];
+	if (!ids.length) return;
+	const placeholders = ids.map((_, index) => `$${index + 1}`).join(', ');
+	await db.execute(`DELETE FROM gallery_tasks WHERE id IN (${placeholders})`, ids);
 }
 
 export async function runSqlBatchWithTransaction(
