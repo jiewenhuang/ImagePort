@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { createEmptyTaskMetadata, DEFAULT_PARAMS, type TaskRecord } from './types';
 import {
 	createDragSelectionBox,
+	getDragSelectionStartIntent,
 	getDragSelectedTaskIds,
 	invertVisibleTaskSelection,
 	normalizeSelectionRect,
@@ -51,4 +52,25 @@ describe('task selection helpers', () => {
 			})
 		).toEqual(['a', 'b']);
 	});
+
+	test('suppresses native browser selection when starting a drag selection', () => {
+		expect(getDragSelectionStartIntent({ button: 0, target: closestTarget(false) })).toEqual({
+			shouldStart: true,
+			shouldPreventDefault: true
+		});
+		expect(getDragSelectionStartIntent({ button: 0, target: closestTarget(true) })).toEqual({
+			shouldStart: false,
+			shouldPreventDefault: false
+		});
+		expect(getDragSelectionStartIntent({ button: 2, target: closestTarget(false) })).toEqual({
+			shouldStart: false,
+			shouldPreventDefault: false
+		});
+	});
 });
+
+function closestTarget(matchesIgnoredSelector: boolean) {
+	return {
+		closest: () => (matchesIgnoredSelector ? {} : null)
+	};
+}

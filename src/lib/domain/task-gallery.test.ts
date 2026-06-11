@@ -6,6 +6,7 @@ import {
 	getTaskPreviewImages,
 	getVisibleGalleryTasks,
 	pruneSelectedTaskIds,
+	shouldShowTaskHydrationSkeleton,
 	TASK_PAGE_SIZE
 } from './task-gallery';
 
@@ -101,5 +102,36 @@ describe('gallery task helpers', () => {
 		];
 
 		expect(getSelectedCompletedTasks(tasks, ['d', 'c', 'b', 'a']).map((item) => item.id)).toEqual(['a', 'c', 'd']);
+	});
+
+	test('shows a hydration skeleton only while an empty task grid is still loading', () => {
+		expect(
+			shouldShowTaskHydrationSkeleton({
+				hasHydratedTasks: false,
+				taskHydrationFailed: false,
+				visibleTaskCount: 0
+			})
+		).toBe(true);
+		expect(
+			shouldShowTaskHydrationSkeleton({
+				hasHydratedTasks: false,
+				taskHydrationFailed: false,
+				visibleTaskCount: 1
+			})
+		).toBe(false);
+		expect(
+			shouldShowTaskHydrationSkeleton({
+				hasHydratedTasks: true,
+				taskHydrationFailed: false,
+				visibleTaskCount: 0
+			})
+		).toBe(false);
+		expect(
+			shouldShowTaskHydrationSkeleton({
+				hasHydratedTasks: false,
+				taskHydrationFailed: true,
+				visibleTaskCount: 0
+			})
+		).toBe(false);
 	});
 });

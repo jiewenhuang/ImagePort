@@ -20,33 +20,35 @@
 	} = $props();
 </script>
 
-<div class="mb-3 flex items-start gap-2 overflow-x-auto pb-1">
+<div class="mb-3 flex items-start gap-2 overflow-x-auto pt-2 pb-1">
 	{#each images as image, index}
 		{@const isMaskTarget = mask?.targetImageId === image.id}
-		<div
-			class={`group relative size-14 shrink-0 overflow-hidden rounded-lg border ${isMaskTarget ? 'border-primary ring-ring ring-2' : 'border-border'}`}
-		>
-			<img class="h-full w-full object-cover" src={image.dataUrl} alt={image.name} />
-			<span class="absolute bottom-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white"
-				>{index + 1}</span
+		<div class="group relative size-14 shrink-0 overflow-visible">
+			<div
+				class={`relative h-full w-full overflow-hidden rounded-lg border ${isMaskTarget ? 'border-primary ring-ring ring-2' : 'border-border'}`}
 			>
-			{#if isMaskTarget}
-				<span
-					class="absolute top-1 left-1 rounded bg-primary px-1.5 py-0.5 text-[9px] font-bold text-primary-foreground"
-					>MASK</span
+				<img class="h-full w-full object-cover" src={image.dataUrl} alt={image.name} />
+				<span class="absolute bottom-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white"
+					>{index + 1}</span
 				>
-			{/if}
+				{#if isMaskTarget}
+					<span
+						class="absolute top-1 left-1 rounded bg-primary px-1.5 py-0.5 text-[9px] font-bold text-primary-foreground"
+						>MASK</span
+					>
+				{/if}
+				<button
+					type="button"
+					class="absolute inset-0 flex items-center justify-center bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100"
+					onclick={() => onEditMask(image.id)}
+					aria-label="编辑遮罩"
+				>
+					<Pencil class="size-4" />
+				</button>
+			</div>
 			<button
 				type="button"
-				class="absolute inset-0 flex items-center justify-center bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100"
-				onclick={() => onEditMask(image.id)}
-				aria-label="编辑遮罩"
-			>
-				<Pencil class="size-4" />
-			</button>
-			<button
-				type="button"
-				class="absolute top-0 right-0 flex size-5 translate-x-1/3 -translate-y-1/3 items-center justify-center rounded-full bg-destructive text-white opacity-0 shadow transition-opacity group-hover:opacity-100"
+				class="absolute top-0 right-0 z-10 flex size-5 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full bg-destructive text-white opacity-0 shadow transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
 				onclick={(event) => {
 					event.stopPropagation();
 					onRemove(image.id);

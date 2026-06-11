@@ -13,6 +13,12 @@ export interface GalleryTaskPage extends GalleryTaskFilter {
 	limit: number;
 }
 
+export interface TaskHydrationSkeletonState {
+	hasHydratedTasks: boolean;
+	taskHydrationFailed: boolean;
+	visibleTaskCount: number;
+}
+
 export function filterGalleryTasks(tasks: TaskRecord[], filter: GalleryTaskFilter): TaskRecord[] {
 	const query = filter.query.trim().toLowerCase();
 	return tasks.filter((task) => {
@@ -32,6 +38,10 @@ export function filterGalleryTasks(tasks: TaskRecord[], filter: GalleryTaskFilte
 
 export function getVisibleGalleryTasks(tasks: TaskRecord[], page: GalleryTaskPage): TaskRecord[] {
 	return filterGalleryTasks(tasks, page).slice(0, Math.max(0, page.limit));
+}
+
+export function shouldShowTaskHydrationSkeleton(state: TaskHydrationSkeletonState): boolean {
+	return !state.hasHydratedTasks && !state.taskHydrationFailed && state.visibleTaskCount === 0;
 }
 
 export function getTaskPreviewImages(task: TaskRecord): string[] {

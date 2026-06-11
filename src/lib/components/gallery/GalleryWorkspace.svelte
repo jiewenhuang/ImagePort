@@ -49,10 +49,12 @@
 		getSelectedCompletedTasks,
 		getVisibleGalleryTasks,
 		pruneSelectedTaskIds,
+		shouldShowTaskHydrationSkeleton,
 		TASK_PAGE_SIZE
 	} from '$lib/domain/task-gallery';
 	import {
 		createDragSelectionBox,
+		getDragSelectionStartIntent,
 		getDragSelectedTaskIds,
 		getVisibleTaskIds,
 		invertVisibleTaskSelection as invertVisibleTaskIdsSelection,
@@ -153,6 +155,7 @@
 	const AGENT_STORAGE_KEY = 'imageport.agent.conversations';
 	const MAX_INPUT_IMAGES = 16;
 	const MAX_OUTPUT_IMAGES = 10;
+	const TASK_GRID_SKELETON_ITEMS = Array.from({ length: 8 }, (_, index) => index);
 
 	let settings = $state<AppSettings>(DEFAULT_SETTINGS);
 	let appMode = $state<'gallery' | 'agent'>('gallery');
@@ -233,6 +236,13 @@
 		})
 	);
 	let hasMoreTasks = $derived(filteredTasks.length > visibleTasks.length || hasMoreStoredTasks);
+	let showTaskHydrationSkeleton = $derived(
+		shouldShowTaskHydrationSkeleton({
+			hasHydratedTasks,
+			taskHydrationFailed,
+			visibleTaskCount: visibleTasks.length
+		})
+	);
 	let selectedDownloadableTasks = $derived(getSelectedCompletedTasks(tasks, selectedTaskIds));
 	let activeFavoriteDownloadableTasks = $derived(
 		activeFavoriteCollectionId
@@ -1069,9 +1079,13 @@
 	}
 
 	function startDragSelection(event: PointerEvent) {
-		if (event.button !== 0) return;
 		const target = event.target as HTMLElement;
-		if (target.closest('[data-no-drag-select],button,input,textarea,select,a,[role="menuitem"]')) return;
+		const intent = getDragSelectionStartIntent({ button: event.button, target });
+		if (!intent.shouldStart) return;
+		if (intent.shouldPreventDefault) {
+			event.preventDefault();
+			document.getSelection()?.removeAllRanges();
+		}
 		selectionBox = createDragSelectionBox(event.clientX, event.clientY);
 		selectionMode = true;
 	}
@@ -1697,7 +1711,7 @@
 	<main
 		data-home-main
 		data-drag-select-surface
-		class="min-h-0 flex-1 overflow-y-auto px-4 pb-8 sm:px-6"
+		class={`min-h-0 flex-1 overflow-y-auto px-4 pb-8 sm:px-6 ${selectionBox ? 'select-none' : ''}`}
 		ondrop={handleDrop}
 		ondragover={handleDragOver}
 		onpointerdown={startDragSelection}
@@ -1848,7 +1862,27 @@
 					{/if}
 				</div>
 
-				{#if visibleTasks.length === 0}
+				{#if showTaskHydrationSkeleton}
+					<section
+						class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+						aria-label="历史任务加载中"
+					>
+						{#each TASK_GRID_SKELETON_ITEMS as item}
+							<article class="border-border bg-card overflow-hidden rounded-lg border shadow-xs" aria-hidden="true">
+								<div class="bg-muted/80 aspect-square w-full animate-pulse"></div>
+								<div class="space-y-3 p-3">
+									<div class="bg-muted h-4 w-4/5 animate-pulse rounded"></div>
+									<div class="bg-muted h-3 w-3/5 animate-pulse rounded"></div>
+									<div class="grid grid-cols-4 gap-2">
+										{#each [0, 1, 2, 3] as action}
+											<div class="bg-muted h-7 animate-pulse rounded" data-skeleton-action={action}></div>
+										{/each}
+									</div>
+								</div>
+							</article>
+						{/each}
+					</section>
+				{:else if visibleTasks.length === 0}
 					<section
 						class="border-border/80 bg-muted/20 flex min-h-[calc(100vh-24rem)] items-center justify-center rounded-lg border border-dashed p-10 text-center"
 					>

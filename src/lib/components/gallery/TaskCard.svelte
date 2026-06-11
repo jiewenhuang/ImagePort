@@ -115,6 +115,7 @@
 				class="h-full w-full object-cover opacity-90 transition-transform duration-300 group-hover:scale-[1.02]"
 				src={viewModel.previewImages.at(-1)}
 				alt={`${task.prompt} partial`}
+				draggable="false"
 			/>
 			<div class="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/65 to-transparent p-3 pt-8 text-xs text-white">
 				{viewModel.runningPartialText}
@@ -124,12 +125,13 @@
 				class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
 				src={viewModel.previewImages[0]}
 				alt={task.prompt}
+				draggable="false"
 			/>
 		{:else if viewModel.previewImages.length > 1}
 			<div class="grid h-full w-full grid-cols-2 gap-1 p-1">
 				{#each viewModel.previewImages.slice(0, 4) as image, index}
 					<div class="relative overflow-hidden rounded-md">
-						<img class="h-full w-full object-cover" src={image} alt={`${task.prompt} ${index + 1}`} />
+						<img class="h-full w-full object-cover" src={image} alt={`${task.prompt} ${index + 1}`} draggable="false" />
 						{#if index === 3 && viewModel.previewImages.length > 4}
 							<div
 								class="absolute inset-0 flex items-center justify-center bg-black/50 text-sm font-semibold text-white"
