@@ -1,6 +1,6 @@
 {
 	"name": "imageport-desktop",
-	"version": "0.1.4",
+	"version": "0.1.5",
 	"description": "A desktop image generation workspace for OpenAI-compatible APIs, local history, references, masks, and agent-assisted creative flows.",
 	"license": "MIT",
 	"type": "module",
