@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { createEmptyTaskMetadata, DEFAULT_PARAMS, type TaskRecord } from '$lib/domain/types';
 import {
 	cleanupUnreferencedTaskImageFiles,
+	countTaskRows,
 	createFileBackedTaskPayload,
 	createAgentConversationRow,
 	deleteTaskRows,
@@ -9,6 +10,7 @@ import {
 	parseTaskPayload,
 	serializeTaskRow,
 	runSqlBatchWithTransaction,
+	selectTaskRowsPage,
 	upsertTaskRow,
 	type FileBackedTaskPayload,
 	type StoredImageFileIndex,
@@ -84,6 +86,43 @@ describe('gallery db row helpers', () => {
 				values: ['task-1', 'task-3']
 			}
 		]);
+	});
+
+	test('selects task rows with limit and offset', async () => {
+		const calls: Array<{ sql: string; values?: unknown[] }> = [];
+		const rows = await selectTaskRowsPage(
+			{
+				async select<T>(sql: string, values?: unknown[]): Promise<T> {
+					calls.push({ sql, values });
+					return [
+						{ id: 'task-2', payload: '{"id":"task-2"}' },
+						{ id: 'task-1', payload: '{"id":"task-1"}' }
+					] as T;
+				}
+			},
+			{ limit: 2, offset: 4 }
+		);
+
+		expect(rows.map((row) => row.id)).toEqual(['task-2', 'task-1']);
+		expect(calls).toEqual([
+			{
+				sql: 'SELECT id, payload FROM gallery_tasks ORDER BY created_at DESC LIMIT $1 OFFSET $2',
+				values: [2, 4]
+			}
+		]);
+	});
+
+	test('counts task rows for incremental hydration', async () => {
+		const calls: Array<{ sql: string; values?: unknown[] }> = [];
+		const count = await countTaskRows({
+			async select<T>(sql: string, values?: unknown[]): Promise<T> {
+				calls.push({ sql, values });
+				return [{ count: 42 }] as T;
+			}
+		});
+
+		expect(count).toBe(42);
+		expect(calls).toEqual([{ sql: 'SELECT COUNT(*) as count FROM gallery_tasks', values: undefined }]);
 	});
 });
 

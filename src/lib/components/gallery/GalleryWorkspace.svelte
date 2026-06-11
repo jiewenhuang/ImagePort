@@ -4,12 +4,9 @@
 		Download,
 		Heart,
 		ImageIcon,
-		ImagePlus,
 		MessagesSquare,
 		Search,
-		SendHorizontal,
 		Settings,
-		SlidersHorizontal,
 		Square,
 		CheckSquare,
 		Trash2
@@ -17,7 +14,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Select } from '$lib/components/ui/select';
-	import { Textarea } from '$lib/components/ui/textarea';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { toast } from 'svelte-sonner';
 	import {
@@ -66,6 +62,13 @@
 		type DragSelectionBox
 	} from '$lib/domain/task-selection';
 	import { addTaskRequestId, takeTaskRequestIds, type ActiveTaskRequestIds } from '$lib/domain/task-lifecycle';
+	import {
+		applyTaskPartialImages,
+		markTaskError,
+		removeTasksById,
+		updateTaskById,
+		updateTasksWhere
+	} from '$lib/domain/task-state';
 	import { normalizeInputDraftSnapshot, readLocalStorageJson } from '$lib/domain/gallery-hydration';
 	import {
 		ALL_FAVORITES_COLLECTION_ID,
@@ -78,9 +81,7 @@
 		type FavoriteCollection
 	} from '$lib/domain/favorites';
 	import { buildTaskImageDownloadEntries, dataUrlToDownloadBytes, extensionFromDataUrl } from '$lib/domain/download';
-	import { buildFullBackupPayload, imageBytesToDataUrl, restoreFullBackupTasks } from '$lib/domain/full-backup';
 	import { createZipBlob } from '$lib/domain/zip';
-	import { readStoredZipEntries } from '$lib/domain/zip';
 	import { copyImageToClipboard } from '$lib/storage/image-clipboard';
 	import {
 		DEFAULT_SETTINGS,
@@ -92,11 +93,8 @@
 		type ApiProfile
 	} from '$lib/domain/settings';
 	import {
-		buildExportedTasks,
-		createTaskImportSummary,
 		estimateTasksStorageBytes,
 		mergeTaskSnapshots,
-		parseImportedTasks,
 		resolveStoredTasks,
 		type TaskImportSummary
 	} from '$lib/domain/task-storage';
@@ -120,7 +118,7 @@
 		deleteTaskImageFiles,
 		deleteStoredTasks,
 		loadStoredAgentConversations,
-		loadStoredTasks,
+		loadStoredTasksPage,
 		saveStoredAgentConversations,
 		saveStoredTask,
 		saveStoredTasks
@@ -129,11 +127,18 @@
 	import { createTaskPersistenceController } from '$lib/storage/task-persistence';
 	import { saveBlobToFile, saveDataUrlToFile } from '$lib/storage/native-download';
 	import AgentWorkspace from './AgentWorkspace.svelte';
+	import GalleryComposer from './GalleryComposer.svelte';
+	import {
+		buildFullBackupExportFile,
+		buildTasksExportFile,
+		createSafeExportName,
+		readFullBackupImportFile,
+		readTaskImportFile
+	} from './gallery-import-export';
 	import GallerySettingsModal from './GallerySettingsModal.svelte';
 	import GalleryLightbox from './GalleryLightbox.svelte';
 	import ImagePortLogo from '$lib/components/brand/ImagePortLogo.svelte';
 	import MaskEditorModal from './MaskEditorModal.svelte';
-	import ReferenceImageStrip from './ReferenceImageStrip.svelte';
 	import SizePickerModal from './SizePickerModal.svelte';
 	import TaskCard from './TaskCard.svelte';
 	import TaskDetailModal from './TaskDetailModal.svelte';
@@ -172,6 +177,10 @@
 	let renamingCollectionId = $state<string | null>(null);
 	let renamingCollectionName = $state('');
 	let visibleTaskLimit = $state(TASK_PAGE_SIZE);
+	let loadedStoredTaskCount = $state(0);
+	let totalStoredTaskCount = $state(0);
+	let hasMoreStoredTasks = $state(false);
+	let isLoadingStoredTasks = $state(false);
 	let lastTaskFilterKey = $state('');
 	let selectionMode = $state(false);
 	let selectedTaskIds = $state<string[]>([]);
@@ -223,7 +232,7 @@
 			limit: visibleTaskLimit
 		})
 	);
-	let hasMoreTasks = $derived(filteredTasks.length > visibleTasks.length);
+	let hasMoreTasks = $derived(filteredTasks.length > visibleTasks.length || hasMoreStoredTasks);
 	let selectedDownloadableTasks = $derived(getSelectedCompletedTasks(tasks, selectedTaskIds));
 	let activeFavoriteDownloadableTasks = $derived(
 		activeFavoriteCollectionId
@@ -340,13 +349,20 @@
 		}
 		let tasksHydrated = false;
 		try {
-			const storedTasks = await loadStoredTasks();
-			const savedTasks = resolveStoredTasks(storedTasks, readLocalStorageJson(localStorage, TASKS_STORAGE_KEY));
-			if (savedTasks && isMounted()) {
-				const normalizedFavorites = normalizeTaskFavorites(
-					tasks.length ? mergeTaskSnapshots(tasks, savedTasks) : savedTasks
-				);
-				tasks = normalizedFavorites;
+			const storedTaskPage = await loadStoredTasksPage({ offset: 0, limit: TASK_PAGE_SIZE });
+			const fallbackTasks = resolveStoredTasks(null, readLocalStorageJson(localStorage, TASKS_STORAGE_KEY));
+			const savedTasks =
+				storedTaskPage && (storedTaskPage.total > 0 || !fallbackTasks.length) ? storedTaskPage.tasks : fallbackTasks;
+			if (isMounted()) {
+				if (savedTasks.length) {
+					const normalizedFavorites = normalizeTaskFavorites(
+						tasks.length ? mergeTaskSnapshots(tasks, savedTasks) : savedTasks
+					);
+					tasks = normalizedFavorites;
+				}
+				loadedStoredTaskCount = storedTaskPage ? storedTaskPage.tasks.length : fallbackTasks.length;
+				totalStoredTaskCount = storedTaskPage ? storedTaskPage.total : fallbackTasks.length;
+				hasMoreStoredTasks = storedTaskPage?.hasMore ?? false;
 			}
 			if (isMounted()) {
 				taskHydrationFailed = false;
@@ -450,6 +466,7 @@
 			profile: submitProfile
 		});
 		tasks = nextTasks;
+		noteStoredTasksAdded(1);
 		if (nextTasks[0]) await taskPersistence.persistTaskSnapshotNow(nextTasks[0]);
 		toast.info('任务已开始', {
 			description: `预计生成 ${formatExpectedImageCount(taskParams.n)}`
@@ -537,6 +554,7 @@
 			agentToolAction: input.inputImages.length ? 'edit' : 'generate'
 		});
 		tasks = nextTasks;
+		noteStoredTasksAdded(1);
 		if (nextTasks[0]) await taskPersistence.persistTaskSnapshotNow(nextTasks[0]);
 		toast.info('Agent 轮次已开始', { description: `预计生成 ${formatExpectedImageCount(input.params.n)}` });
 		void runAgentResponsesRound({
@@ -628,24 +646,20 @@
 				isCanceled: () => !hasTask(taskId)
 			});
 			if (!hasTask(taskId)) return;
-			const nextTasks: TaskRecord[] = tasks.map((task) =>
-				task.id === taskId
-					? {
-							...task,
-							images: result.images,
-							status: result.status,
-							error: result.errorMessage,
-							failureCount: result.failureCount,
-							finishedAt: Date.now(),
-							actualParams: result.actualParams,
-							actualParamsByImage: buildActualParamsByImage(result.images, result.actualParamsList),
-							revisedPromptByImage: buildRevisedPromptByImage(result.images, result.revisedPrompts),
-							rawImageUrls: result.rawImageUrls,
-							rawResponsePayload: result.rawResponsePayload,
-							streamPartialImageIds: result.streamPartialImages
-						}
-					: task
-			);
+			const nextTasks = updateTaskById(tasks, taskId, (task) => ({
+				...task,
+				images: result.images,
+				status: result.status,
+				error: result.errorMessage,
+				failureCount: result.failureCount,
+				finishedAt: Date.now(),
+				actualParams: result.actualParams,
+				actualParamsByImage: buildActualParamsByImage(result.images, result.actualParamsList),
+				revisedPromptByImage: buildRevisedPromptByImage(result.images, result.revisedPrompts),
+				rawImageUrls: result.rawImageUrls,
+				rawResponsePayload: result.rawResponsePayload,
+				streamPartialImageIds: result.streamPartialImages
+			}));
 			tasks = nextTasks;
 			const updatedTask = nextTasks.find((task) => task.id === taskId);
 			if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
@@ -662,17 +676,14 @@
 			const message = err instanceof Error ? err.message : String(err);
 			error = message;
 			toast.error('生成失败', { description: message });
-			const nextTasks: TaskRecord[] = tasks.map((task) =>
-				task.id === taskId
-					? {
-							...task,
-							status: 'error',
-							error: message,
-							finishedAt: Date.now(),
-							failureCount: getFailureCountForParams(task.params.n, 0)
-						}
-					: task
-			);
+			const failedTask = tasks.find((task) => task.id === taskId);
+			const nextTasks = failedTask
+				? markTaskError(tasks, taskId, {
+						message,
+						finishedAt: Date.now(),
+						failureCount: getFailureCountForParams(failedTask.params.n, 0)
+					})
+				: tasks;
 			tasks = nextTasks;
 			const updatedTask = nextTasks.find((task) => task.id === taskId);
 			if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
@@ -715,23 +726,19 @@
 			});
 			if (isAgentRoundCanceled(input.roundId)) return;
 			const content = createAgentAssistantFallbackText(result, input.params.n);
-			const nextTasks: TaskRecord[] = tasks.map((task) =>
-				task.id === input.taskId
-					? {
-							...task,
-							images: result.images,
-							status: result.images.length ? 'done' : result.partialImages.length ? 'partial' : 'error',
-							error: result.images.length || result.partialImages.length ? null : 'Agent 没有返回图片',
-							failureCount: getFailureCountForParams(input.params.n, result.images.length),
-							finishedAt: Date.now(),
-							actualParams: result.actualParams,
-							actualParamsByImage: buildActualParamsByImage(result.images, result.actualParamsList),
-							revisedPromptByImage: buildRevisedPromptByImage(result.images, result.revisedPrompts),
-							rawResponsePayload: result.rawResponsePayload,
-							streamPartialImageIds: result.partialImages
-						}
-					: task
-			);
+			const nextTasks = updateTaskById(tasks, input.taskId, (task) => ({
+				...task,
+				images: result.images,
+				status: result.images.length ? 'done' : result.partialImages.length ? 'partial' : 'error',
+				error: result.images.length || result.partialImages.length ? null : 'Agent 没有返回图片',
+				failureCount: getFailureCountForParams(input.params.n, result.images.length),
+				finishedAt: Date.now(),
+				actualParams: result.actualParams,
+				actualParamsByImage: buildActualParamsByImage(result.images, result.actualParamsList),
+				revisedPromptByImage: buildRevisedPromptByImage(result.images, result.revisedPrompts),
+				rawResponsePayload: result.rawResponsePayload,
+				streamPartialImageIds: result.partialImages
+			}));
 			tasks = nextTasks;
 			const updatedTask = nextTasks.find((task) => task.id === input.taskId);
 			if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
@@ -767,17 +774,13 @@
 			const message = err instanceof Error ? err.message : String(err);
 			error = message;
 			toast.error('Agent 失败', { description: message });
-			const nextTasks: TaskRecord[] = tasks.map((task) =>
-				task.id === input.taskId
-					? {
-							...task,
-							status: task.streamPartialImageIds.length ? 'partial' : 'error',
-							error: message,
-							finishedAt: Date.now(),
-							failureCount: getFailureCountForParams(task.params.n, task.images.length)
-						}
-					: task
-			);
+			const nextTasks = updateTaskById(tasks, input.taskId, (task) => ({
+				...task,
+				status: task.streamPartialImageIds.length ? 'partial' : 'error',
+				error: message,
+				finishedAt: Date.now(),
+				failureCount: getFailureCountForParams(task.params.n, task.images.length)
+			}));
 			tasks = nextTasks;
 			const updatedTask = nextTasks.find((task) => task.id === input.taskId);
 			if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
@@ -799,14 +802,7 @@
 
 	function updateTaskPartialImages(taskId: string, partialImages: string[]) {
 		if (!hasTask(taskId)) return;
-		const nextTasks: TaskRecord[] = tasks.map((task) =>
-			task.id === taskId
-				? {
-						...task,
-						streamPartialImageIds: partialImages
-					}
-				: task
-		);
+		const nextTasks = applyTaskPartialImages(tasks, taskId, partialImages);
 		tasks = nextTasks;
 		taskPersistence.persistTaskSnapshotSoon(taskId);
 	}
@@ -864,10 +860,8 @@
 	}
 
 	function toggleTaskFavorite(taskId: string) {
-		const nextTasks = tasks.map((task) =>
-			task.id === taskId
-				? toggleTaskFavoriteCollection(task, settings.defaultFavoriteCollectionId || DEFAULT_FAVORITE_COLLECTION_ID)
-				: task
+		const nextTasks = updateTaskById(tasks, taskId, (task) =>
+			toggleTaskFavoriteCollection(task, settings.defaultFavoriteCollectionId || DEFAULT_FAVORITE_COLLECTION_ID)
 		);
 		tasks = nextTasks;
 		const updatedTask = nextTasks.find((task) => task.id === taskId);
@@ -924,16 +918,16 @@
 				content: '已停止。已返回的 partial 图片会保留在关联任务里。'
 			})
 		);
-		const nextTasks = tasks.map((task) =>
-			task.agentRoundId === roundId && task.status === 'running'
-				? {
-						...task,
-						status: task.streamPartialImageIds.length ? ('partial' as const) : ('error' as const),
-						error: task.streamPartialImageIds.length ? null : '用户停止了 Agent 轮次',
-						finishedAt: Date.now(),
-						failureCount: getFailureCountForParams(task.params.n, task.images.length)
-					}
-				: task
+		const nextTasks = updateTasksWhere(
+			tasks,
+			(task) => task.agentRoundId === roundId && task.status === 'running',
+			(task) => ({
+				...task,
+				status: task.streamPartialImageIds.length ? 'partial' : 'error',
+				error: task.streamPartialImageIds.length ? null : '用户停止了 Agent 轮次',
+				finishedAt: Date.now(),
+				failureCount: getFailureCountForParams(task.params.n, task.images.length)
+			})
 		);
 		tasks = nextTasks;
 		void Promise.all(
@@ -1098,8 +1092,12 @@
 		const selectedIds = new Set(selectedTaskIds);
 		const tasksToRemove = tasks.filter((task) => selectedIds.has(task.id));
 		if (!tasksToRemove.length) return;
-		const nextTasks = tasks.filter((task) => !selectedIds.has(task.id));
+		const nextTasks = removeTasksById(
+			tasks,
+			tasksToRemove.map((task) => task.id)
+		);
 		tasks = nextTasks;
+		noteStoredTasksRemoved(tasksToRemove.length);
 		cancelGalleryTaskRequests(tasksToRemove.map((task) => task.id));
 		if (selectedTaskId && selectedIds.has(selectedTaskId)) {
 			selectedTaskId = null;
@@ -1158,8 +1156,9 @@
 
 	function removeTask(taskId: string) {
 		const taskToRemove = tasks.find((task) => task.id === taskId);
-		const nextTasks = tasks.filter((task) => task.id !== taskId);
+		const nextTasks = removeTasksById(tasks, [taskId]);
 		tasks = nextTasks;
+		noteStoredTasksRemoved(1);
 		cancelGalleryTaskRequests([taskId]);
 		selectedTaskIds = selectedTaskIds.filter((id) => id !== taskId);
 		if (selectedTaskId === taskId) {
@@ -1228,11 +1227,6 @@
 		openImagesLightbox(images, imageIndex, `${task.prompt} 输入图`, null);
 	}
 
-	function clearPrompt() {
-		if (appMode === 'agent') agentPrompt = '';
-		else prompt = '';
-	}
-
 	function refreshTasksStorageBytes(nextTasks: TaskRecord[] = tasks) {
 		tasksStorageBytes = estimateTasksStorageBytes(nextTasks);
 	}
@@ -1242,15 +1236,50 @@
 		showSettings = true;
 	}
 
-	function loadMoreTasks() {
+	async function loadMoreTasks() {
+		if (hasMoreStoredTasks) await loadMoreStoredTasks();
 		visibleTaskLimit += TASK_PAGE_SIZE;
 	}
 
-	function formatTaskTime(timestamp: number) {
-		return new Intl.DateTimeFormat('zh-CN', {
-			hour: '2-digit',
-			minute: '2-digit'
-		}).format(timestamp);
+	async function loadMoreStoredTasks() {
+		if (isLoadingStoredTasks || !hasMoreStoredTasks) return;
+		isLoadingStoredTasks = true;
+		try {
+			const page = await loadStoredTasksPage({ offset: loadedStoredTaskCount, limit: TASK_PAGE_SIZE });
+			if (!page) {
+				hasMoreStoredTasks = false;
+				return;
+			}
+			if (page.tasks.length) {
+				tasks = normalizeTaskFavorites(mergeTaskSnapshots(tasks, page.tasks));
+			}
+			loadedStoredTaskCount = Math.max(loadedStoredTaskCount, page.offset + page.tasks.length);
+			totalStoredTaskCount = page.total;
+			hasMoreStoredTasks = page.hasMore;
+		} catch (err) {
+			toast.warning('历史任务加载失败', { description: err instanceof Error ? err.message : String(err) });
+			hasMoreStoredTasks = false;
+		} finally {
+			isLoadingStoredTasks = false;
+		}
+	}
+
+	function noteStoredTasksRemoved(count: number) {
+		loadedStoredTaskCount = Math.max(0, loadedStoredTaskCount - count);
+		totalStoredTaskCount = Math.max(0, totalStoredTaskCount - count);
+		hasMoreStoredTasks = loadedStoredTaskCount < totalStoredTaskCount;
+	}
+
+	function noteStoredTasksAdded(count: number) {
+		if (!hasMoreStoredTasks) loadedStoredTaskCount += count;
+		totalStoredTaskCount += count;
+		hasMoreStoredTasks = loadedStoredTaskCount < totalStoredTaskCount;
+	}
+
+	function markAllStoredTasksLoaded(count: number) {
+		loadedStoredTaskCount = count;
+		totalStoredTaskCount = count;
+		hasMoreStoredTasks = false;
 	}
 
 	function getStatusLabel(status: TaskRecord['status']) {
@@ -1258,31 +1287,6 @@
 		if (status === 'partial') return '部分完成';
 		if (status === 'error') return '失败';
 		return '已完成';
-	}
-
-	function getStatusClass(status: TaskRecord['status']) {
-		if (status === 'running') return 'border-blue-200 bg-blue-50 text-blue-700';
-		if (status === 'partial') return 'border-amber-200 bg-amber-50 text-amber-700';
-		if (status === 'error') return 'border-red-200 bg-red-50 text-red-700';
-		return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-	}
-
-	function formatDuration(ms: number) {
-		const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-		const minutes = Math.floor(totalSeconds / 60);
-		const seconds = totalSeconds % 60;
-		if (minutes <= 0) return `${seconds}s`;
-		return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
-	}
-
-	function getTaskElapsedMs(task: TaskRecord) {
-		return (task.finishedAt ?? now) - task.createdAt;
-	}
-
-	function getTaskProgressText(task: TaskRecord) {
-		const prefix = task.status === 'running' ? '等待' : '耗时';
-		const partial = task.streamPartialImageIds.length ? ` · partial ${task.streamPartialImageIds.length} 张` : '';
-		return `${prefix} ${formatDuration(getTaskElapsedMs(task))} · 预计 ${formatExpectedImageCount(task.params.n)} · 实际 ${task.images.length} 张${partial}`;
 	}
 
 	function normalizeParamsForRequest(value: TaskParams, profile: ApiProfile, mode: 'gallery' | 'agent'): TaskParams {
@@ -1311,10 +1315,6 @@
 		return getMissingOutputImageCount(expectedCount, actualCount);
 	}
 
-	function getTaskDownloadableImageCount(task: TaskRecord) {
-		return task.images.length + task.streamPartialImageIds.length;
-	}
-
 	function getAgentRoundLabel(roundStatus: string | undefined) {
 		if (roundStatus === 'running') return '运行中';
 		if (roundStatus === 'error') return '失败';
@@ -1329,37 +1329,12 @@
 		return 'border-emerald-200 bg-emerald-50 text-emerald-700';
 	}
 
-	function updateImageCount(event: Event) {
-		if (params.n === 'auto') return;
-		const input = event.currentTarget as HTMLInputElement;
-		const numeric = Number(input.value);
-		params.n = Number.isFinite(numeric) ? Math.min(MAX_OUTPUT_IMAGES, Math.max(1, Math.trunc(numeric))) : 1;
-	}
-
-	function updateCompression(event: Event) {
-		const input = event.currentTarget as HTMLInputElement;
-		const trimmed = input.value.trim();
-		if (!trimmed) {
-			params.output_compression = null;
-			return;
-		}
-		const numeric = Number(trimmed);
-		params.output_compression = Number.isFinite(numeric) ? Math.min(100, Math.max(0, Math.trunc(numeric))) : null;
-	}
-
 	function notifyTaskCompleted(taskPrompt: string, actualCount: number, expectedCount: OutputImageCount) {
 		if (!settings.taskCompletionNotification || typeof Notification === 'undefined') return;
 		if (Notification.permission !== 'granted') return;
 		new Notification('ImagePort 生成完成', {
 			body: `${formatImageCountRatio(actualCount, expectedCount)} · ${taskPrompt.slice(0, 48)}`
 		});
-	}
-
-	function handlePromptKeydown(event: KeyboardEvent) {
-		if (!settings.enterSubmit) return;
-		if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
-		event.preventDefault();
-		void (appMode === 'agent' ? submitAgentMessage() : submitGeneration());
 	}
 
 	function openFilePicker() {
@@ -1447,6 +1422,7 @@
 	function clearTasks() {
 		const tasksToClear = tasks;
 		tasks = [];
+		markAllStoredTasksLoaded(0);
 		refreshTasksStorageBytes([]);
 		cancelGalleryTaskRequests(tasksToClear.map((task) => task.id));
 		clearTaskSelection();
@@ -1487,9 +1463,8 @@
 	}
 
 	function exportTasks() {
-		const payload = buildExportedTasks(tasks);
-		const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-		void saveBlobToFile(blob, 'imageport-tasks.json')
+		const file = buildTasksExportFile(tasks);
+		void saveBlobToFile(file.blob, file.fileName)
 			.then((saved) => {
 				if (saved) toast.success('任务已导出', { description: `${tasks.length} 个任务` });
 			})
@@ -1497,21 +1472,18 @@
 	}
 
 	function exportFullBackup() {
-		const payload = buildFullBackupPayload(tasks, settings, Date.now(), agentConversations);
-		const manifestBytes = new TextEncoder().encode(JSON.stringify(payload.manifest, null, 2));
-		const blob = createZipBlob([{ path: 'manifest.json', data: manifestBytes }, ...payload.files]);
-		const fileName = `imageport-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.zip`;
-		void saveBlobToFile(blob, fileName)
+		const file = buildFullBackupExportFile({ tasks, settings, agentConversations });
+		void saveBlobToFile(file.blob, file.fileName)
 			.then((saved) => {
-				if (saved) toast.success('完整备份已导出', { description: fileName });
+				if (saved) toast.success('完整备份已导出', { description: file.fileName });
 			})
 			.catch(handleDownloadError);
 	}
 
 	async function importTasksFromFile(file: File): Promise<TaskImportSummary> {
-		const imported = parseImportedTasks(await file.text());
-		const summary = createTaskImportSummary(tasks, imported);
+		const summary = await readTaskImportFile(file, tasks);
 		tasks = summary.tasks;
+		markAllStoredTasksLoaded(summary.tasks.length);
 		refreshTasksStorageBytes(summary.tasks);
 		await taskPersistence.persistTasksSnapshot(summary.tasks);
 		toast.success('任务已导入', {
@@ -1521,27 +1493,19 @@
 	}
 
 	async function importFullBackupFromFile(file: File): Promise<TaskImportSummary> {
-		const entries = readStoredZipEntries(new Uint8Array(await file.arrayBuffer()));
-		const manifestBytes = entries.get('manifest.json');
-		if (!manifestBytes) throw new Error('备份 ZIP 缺少 manifest.json');
-		const manifest = JSON.parse(new TextDecoder().decode(manifestBytes)) as Parameters<
-			typeof restoreFullBackupTasks
-		>[0];
-		const restoredTasks = await restoreFullBackupTasks(manifest, async (path) => {
-			const bytes = entries.get(path);
-			return bytes ? imageBytesToDataUrl(bytes, path) : null;
+		const result = await readFullBackupImportFile({
+			file,
+			tasks,
+			settings,
+			agentConversations,
+			activeAgentConversationId
 		});
-		settings = normalizeSettings({
-			...manifest.settings,
-			profiles: [...settings.profiles, ...manifest.settings.profiles],
-			activeProfileId: settings.activeProfileId
-		});
-		if (manifest.agentConversations?.length) {
-			agentConversations = normalizeAgentConversations([...agentConversations, ...manifest.agentConversations]);
-			activeAgentConversationId = activeAgentConversationId ?? agentConversations[0]?.id ?? null;
-		}
-		const summary = createTaskImportSummary(tasks, restoredTasks);
+		settings = result.settings;
+		agentConversations = result.agentConversations;
+		activeAgentConversationId = result.activeAgentConversationId;
+		const summary = result.summary;
 		tasks = summary.tasks;
+		markAllStoredTasksLoaded(summary.tasks.length);
 		refreshTasksStorageBytes(summary.tasks);
 		await taskPersistence.persistTasksSnapshot(summary.tasks);
 		toast.success('完整备份已恢复', {
@@ -1636,15 +1600,6 @@
 		toast.error('下载失败', { description: message });
 	}
 
-	function createSafeExportName(value: string) {
-		return (
-			value
-				.trim()
-				.replace(/[^a-zA-Z0-9\u4e00-\u9fa5._-]+/g, '-')
-				.replace(/^-+|-+$/g, '')
-				.slice(0, 48) || 'imageport'
-		);
-	}
 </script>
 
 <svelte:head>
@@ -1864,6 +1819,7 @@
 						{#each visibleTasks as task}
 							<TaskCard
 								{task}
+								{now}
 								isSelected={selectedTaskIds.includes(task.id)}
 								canDownloadZip={isZipRouteEnabled('task-card')}
 								onOpen={openTask}
@@ -1881,26 +1837,21 @@
 								onUseFirstOutputReference={(task) => useOutputAsReference(task, 0)}
 								onEditMask={(task) => editOutputWithMask(task, 0)}
 								onDelete={removeTask}
-								{formatDuration}
-								{formatExpectedImageCount}
-								{formatImageCountRatio}
-								{formatTaskTime}
-								{getTaskDownloadableImageCount}
-								{getTaskElapsedMs}
-								{getTaskProgressText}
-								{getStatusClass}
-								{getStatusLabel}
 							/>
 						{/each}
 					</section>
-					{#if hasMoreTasks}
-						<div data-no-drag-select class="flex justify-center pt-5">
-							<Button type="button" variant="outline" onclick={loadMoreTasks}>
-								加载更多
-								<span class="text-muted-foreground text-xs">{visibleTasks.length}/{filteredTasks.length}</span>
-							</Button>
-						</div>
-					{/if}
+						{#if hasMoreTasks}
+							<div data-no-drag-select class="flex justify-center pt-5">
+								<Button type="button" variant="outline" onclick={loadMoreTasks} disabled={isLoadingStoredTasks}>
+									{isLoadingStoredTasks ? '加载中...' : '加载更多'}
+									<span class="text-muted-foreground text-xs">
+										{hasMoreStoredTasks
+											? `${tasks.length}/${totalStoredTaskCount || '...'}`
+											: `${visibleTasks.length}/${filteredTasks.length}`}
+									</span>
+								</Button>
+							</div>
+						{/if}
 				{/if}
 				{#if selectionBox}
 					{@const rect = normalizeSelectionRect(selectionBox)}
@@ -1937,160 +1888,39 @@
 		{/if}
 	</main>
 
-	<div data-input-bar class="pointer-events-none fixed bottom-4 left-1/2 z-30 w-full max-w-4xl -translate-x-1/2 px-3">
-		<div class="pointer-events-auto w-full">
-			<form
-				class="border-border bg-card/95 rounded-xl border p-3 shadow-2xl backdrop-blur"
-				onsubmit={(event) => {
-					event.preventDefault();
-					void (appMode === 'agent' ? submitAgentMessage() : submitGeneration());
-				}}
-				onpaste={handlePaste}
-			>
-				{#if inputImages.length > 0}
-					<ReferenceImageStrip
-						images={inputImages}
-						{mask}
-						onAdd={openFilePicker}
-						onRemove={removeInputImage}
-						onClear={clearInputImages}
-						onEditMask={(id) => {
-							maskEditorImageId = id;
-							showMaskEditor = true;
-						}}
-					/>
-				{/if}
-
-				<div class="mb-3 grid grid-cols-[auto_repeat(6,minmax(0,1fr))] items-end gap-2 max-lg:grid-cols-3">
-					<div class="text-muted-foreground flex h-9 items-center gap-1.5 text-xs font-medium max-lg:col-span-3">
-						<SlidersHorizontal class="size-3.5" />
-						参数
-					</div>
-					<Button
-						type="button"
-						variant="outline"
-						class="justify-start overflow-hidden px-3 text-xs"
-						onclick={() => (showSizePicker = true)}
-					>
-						<span class="truncate">{params.size}</span>
-					</Button>
-					<Select bind:value={params.quality} name="quality" class="h-9 rounded-lg text-xs" aria-label="质量">
-						{#each qualityOptions as option}
-							<option value={option}>质量 {option}</option>
-						{/each}
-					</Select>
-					<Select
-						bind:value={params.output_format}
-						name="outputFormat"
-						class="h-9 rounded-lg text-xs"
-						aria-label="格式"
-					>
-						{#each formatOptions as option}
-							<option value={option}>格式 {option}</option>
-						{/each}
-					</Select>
-					<Select bind:value={params.moderation} name="moderation" class="h-9 rounded-lg text-xs" aria-label="审核强度">
-						{#each moderationOptions as option}
-							<option value={option}>审核 {option}</option>
-						{/each}
-					</Select>
-					<Input
-						value={params.output_compression ?? ''}
-						name="outputCompression"
-						type="number"
-						min="0"
-						max="100"
-						class="h-9 rounded-lg text-xs"
-						placeholder="压缩"
-						disabled={params.output_format === 'png'}
-						oninput={updateCompression}
-					/>
-					<Input
-						value={activeParams.n}
-						name="imageCount"
-						type={activeParams.n === 'auto' ? 'text' : 'number'}
-						min="1"
-						max={MAX_OUTPUT_IMAGES}
-						class="h-9 rounded-lg text-xs"
-						disabled={activeParams.n === 'auto'}
-						aria-label="生成数量"
-						oninput={updateImageCount}
-					/>
-				</div>
-
-				<div class="flex gap-3">
-					<Textarea
-						value={appMode === 'agent' ? agentPrompt : prompt}
-						name="prompt"
-						class="max-h-36 min-h-20 flex-1 resize-none rounded-lg border-0 bg-muted/40 p-3 shadow-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0"
-						placeholder={appMode === 'agent'
-							? '给 Agent 发送图片生成或修改需求...'
-							: inputImages.length
-								? '描述如何编辑或参考这些图片...'
-								: '描述你想生成的图片...'}
-						oninput={(event) => {
-							if (appMode === 'agent') agentPrompt = (event.currentTarget as HTMLTextAreaElement).value;
-							else prompt = (event.currentTarget as HTMLTextAreaElement).value;
-						}}
-						onkeydown={handlePromptKeydown}
-					/>
-					<div class="flex w-11 flex-col gap-2">
-						<Button
-							type="button"
-							variant="outline"
-							size="icon"
-							onclick={openFilePicker}
-							disabled={inputImages.length >= MAX_INPUT_IMAGES}
-							aria-label="添加参考图"
-						>
-							<ImagePlus class="size-4" />
-						</Button>
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon"
-							onclick={clearPrompt}
-							disabled={appMode === 'agent' ? !agentPrompt.trim() : !prompt.trim()}
-							aria-label="清空提示词"
-						>
-							<span class="text-base leading-none">×</span>
-						</Button>
-						<Button
-							type="submit"
-							size="icon"
-							disabled={appMode === 'agent' ? !canSubmitAgent : !canSubmit}
-							aria-label={activeProfile.apiKey ? (appMode === 'agent' ? '发送 Agent 消息' : '生成图像') : '配置 API'}
-						>
-							<SendHorizontal class="size-4" />
-						</Button>
-					</div>
-				</div>
-
-				<div class="mt-2 flex items-center justify-between gap-3">
-					<p class="text-muted-foreground truncate text-xs">
-						{!activeProfile.apiKey
-							? '尚未配置 API'
-							: appMode === 'agent' && agentBlockReason
-								? agentBlockReason
-								: profileBlockReason
-									? profileBlockReason
-									: appMode === 'agent'
-										? `Agent · 最大工具轮数 ${settings.agentMaxToolRounds}${settings.agentWebSearch ? ' · Web Search' : ''} · ${activeProfile.name} · ${activeProfile.model} · ${activeProfile.timeoutSecs}s${activeProfile.responseFormatB64Json ? ' · b64_json' : ''}`
-										: `${nextGalleryProfileOverrideId ? '临时复用 · ' : ''}${effectiveGalleryProfile.name} · ${effectiveGalleryProfile.model} · ${effectiveGalleryProfile.timeoutSecs}s${effectiveGalleryProfile.responseFormatB64Json ? ' · b64_json' : ''}`}
-					</p>
-					<p class="text-muted-foreground hidden text-xs sm:block">可粘贴或拖拽图片到窗口</p>
-				</div>
-
-				{#if error}
-					<div
-						class="border-destructive/30 bg-destructive/10 text-destructive mt-3 rounded-md border px-3 py-2 text-sm"
-					>
-						{error}
-					</div>
-				{/if}
-			</form>
-		</div>
-	</div>
+	<GalleryComposer
+		{appMode}
+		bind:prompt
+		bind:agentPrompt
+		bind:params
+		{inputImages}
+		{mask}
+		{error}
+		{settings}
+		{activeProfile}
+		{effectiveGalleryProfile}
+		{activeParams}
+		{profileBlockReason}
+		{agentBlockReason}
+		{nextGalleryProfileOverrideId}
+		{canSubmit}
+		{canSubmitAgent}
+		maxInputImages={MAX_INPUT_IMAGES}
+		maxOutputImages={MAX_OUTPUT_IMAGES}
+		{qualityOptions}
+		{formatOptions}
+		{moderationOptions}
+		onSubmit={() => void (appMode === 'agent' ? submitAgentMessage() : submitGeneration())}
+		onPaste={handlePaste}
+		onOpenFilePicker={openFilePicker}
+		onOpenSizePicker={() => (showSizePicker = true)}
+		onRemoveInputImage={removeInputImage}
+		onClearInputImages={clearInputImages}
+		onEditMask={(id) => {
+			maskEditorImageId = id;
+			showMaskEditor = true;
+		}}
+	/>
 
 	<input
 		bind:this={fileInput}

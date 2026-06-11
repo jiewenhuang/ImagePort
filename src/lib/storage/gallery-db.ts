@@ -18,7 +18,7 @@ import { canUseTauriPlugins } from './runtime';
 
 const DB_PATH = 'sqlite:imageport.db';
 
-interface TaskRow {
+export interface TaskRow {
 	id: string;
 	payload: string;
 }
@@ -30,6 +30,23 @@ interface AgentConversationRow {
 
 interface GalleryDbExecutor {
 	execute(sql: string, values?: unknown[]): Promise<unknown>;
+}
+
+export interface GalleryDbSelector {
+	select<T>(sql: string, values?: unknown[]): Promise<T>;
+}
+
+export interface StoredTaskPageRequest {
+	offset?: number;
+	limit?: number;
+}
+
+export interface StoredTaskPage {
+	tasks: TaskRecord[];
+	offset: number;
+	limit: number;
+	total: number;
+	hasMore: boolean;
 }
 
 export interface TaskImageFileStore {
@@ -122,6 +139,22 @@ export async function loadStoredTasks(): Promise<TaskRecord[] | null> {
 	const rows = await db.select<TaskRow[]>('SELECT id, payload FROM gallery_tasks ORDER BY created_at DESC');
 	const payloads = await Promise.all(rows.map((row) => hydrateStoredPayload(row.payload, tauriImageFileStore)));
 	return normalizeTasks(payloads);
+}
+
+export async function loadStoredTasksPage(input: StoredTaskPageRequest = {}): Promise<StoredTaskPage | null> {
+	const db = await getGalleryDb();
+	if (!db) return null;
+	const offset = normalizePaginationNumber(input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+	const limit = normalizePaginationNumber(input.limit, 48, 1, 500);
+	const [total, rows] = await Promise.all([countTaskRows(db), selectTaskRowsPage(db, { offset, limit })]);
+	const payloads = await Promise.all(rows.map((row) => hydrateStoredPayload(row.payload, tauriImageFileStore)));
+	return {
+		tasks: normalizeTasks(payloads),
+		offset,
+		limit,
+		total,
+		hasMore: offset + rows.length < total
+	};
 }
 
 export async function saveStoredTasks(
@@ -265,6 +298,22 @@ export async function deleteTaskRows(db: GalleryDbExecutor, taskIds: string[]): 
 	if (!ids.length) return;
 	const placeholders = ids.map((_, index) => `$${index + 1}`).join(', ');
 	await db.execute(`DELETE FROM gallery_tasks WHERE id IN (${placeholders})`, ids);
+}
+
+export async function selectTaskRowsPage(
+	db: GalleryDbSelector,
+	input: Required<StoredTaskPageRequest>
+): Promise<TaskRow[]> {
+	return db.select<TaskRow[]>('SELECT id, payload FROM gallery_tasks ORDER BY created_at DESC LIMIT $1 OFFSET $2', [
+		input.limit,
+		input.offset
+	]);
+}
+
+export async function countTaskRows(db: GalleryDbSelector): Promise<number> {
+	const rows = await db.select<Array<{ count: number | string | null }>>('SELECT COUNT(*) as count FROM gallery_tasks');
+	const count = Number(rows[0]?.count ?? 0);
+	return Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0;
 }
 
 export async function runSqlBatchWithTransaction(
@@ -534,4 +583,9 @@ function getTaskPayloadImageFiles(payload: FileBackedTaskPayload): StoredImageFi
 
 function isFileBackedTaskPayload(value: unknown): value is FileBackedTaskPayload {
 	return Boolean(value) && typeof value === 'object' && (value as FileBackedTaskPayload).version === 2;
+}
+
+function normalizePaginationNumber(value: unknown, fallback: number, min: number, max: number): number {
+	const numeric = typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : fallback;
+	return Math.min(max, Math.max(min, numeric));
 }

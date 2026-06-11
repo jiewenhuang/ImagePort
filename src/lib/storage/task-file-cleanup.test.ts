@@ -34,4 +34,30 @@ describe('task file cleanup helpers', () => {
 
 		expect(failedCount).toBe(1);
 	});
+
+	test('limits concurrent cleanup work while counting failed tasks', async () => {
+		let activeCount = 0;
+		let maxActiveCount = 0;
+		const startedTaskIds: string[] = [];
+		const failedCount = await deleteTaskImageFilesWithReport(
+			[task('a'), task('b'), task('c'), task('d'), task('e')],
+			async (item) => {
+				startedTaskIds.push(item.id);
+				activeCount += 1;
+				maxActiveCount = Math.max(maxActiveCount, activeCount);
+				await delay();
+				activeCount -= 1;
+				if (item.id === 'c' || item.id === 'e') throw new Error('permission denied');
+			},
+			{ concurrency: 2 }
+		);
+
+		expect(failedCount).toBe(2);
+		expect(maxActiveCount <= 2).toBe(true);
+		expect(startedTaskIds).toEqual(['a', 'b', 'c', 'd', 'e']);
+	});
 });
+
+function delay() {
+	return new Promise<void>((resolve) => setTimeout(resolve, 1));
+}

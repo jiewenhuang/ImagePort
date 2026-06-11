@@ -3,12 +3,13 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { getTaskPreviewImages } from '$lib/domain/task-gallery';
-	import type { OutputImageCount, TaskRecord } from '$lib/domain/types';
+	import type { TaskRecord } from '$lib/domain/types';
 	import ImageActionContextMenu from './ImageActionContextMenu.svelte';
+	import { buildTaskCardViewModel } from './task-card-view-model';
 
 	let {
 		task,
+		now,
 		isSelected,
 		canDownloadZip,
 		onOpen,
@@ -22,18 +23,10 @@
 		onUsePrimaryReference,
 		onUseFirstOutputReference,
 		onEditMask,
-		onDelete,
-		formatDuration,
-		formatExpectedImageCount,
-		formatImageCountRatio,
-		formatTaskTime,
-		getTaskDownloadableImageCount,
-		getTaskElapsedMs,
-		getTaskProgressText,
-		getStatusClass,
-		getStatusLabel
+		onDelete
 	}: {
 		task: TaskRecord;
+		now: number;
 		isSelected: boolean;
 		canDownloadZip: boolean;
 		onOpen: (task: TaskRecord) => void;
@@ -48,19 +41,9 @@
 		onUseFirstOutputReference: (task: TaskRecord) => void | Promise<void>;
 		onEditMask: (task: TaskRecord) => void | Promise<void>;
 		onDelete: (taskId: string) => void;
-		formatDuration: (ms: number) => string;
-		formatExpectedImageCount: (value: OutputImageCount) => string;
-		formatImageCountRatio: (actualCount: number, expectedCount: OutputImageCount) => string;
-		formatTaskTime: (timestamp: number) => string;
-		getTaskDownloadableImageCount: (task: TaskRecord) => number;
-		getTaskElapsedMs: (task: TaskRecord) => number;
-		getTaskProgressText: (task: TaskRecord) => string;
-		getStatusClass: (status: TaskRecord['status']) => string;
-		getStatusLabel: (status: TaskRecord['status']) => string;
 	} = $props();
 
-	let previewImages = $derived(task.images.length ? getTaskPreviewImages(task) : task.streamPartialImageIds.slice(-4));
-	let primaryImage = $derived(task.images[0] ?? task.streamPartialImageIds[0]);
+	let viewModel = $derived(buildTaskCardViewModel(task, { now, canDownloadZip }));
 </script>
 
 <article
@@ -68,17 +51,17 @@
 	class={`border-border bg-card group overflow-hidden rounded-lg border shadow-xs ${isSelected ? 'border-primary ring-ring ring-2' : ''}`}
 >
 	<div class="bg-muted relative aspect-square w-full overflow-hidden">
-		{#if primaryImage}
+		{#if viewModel.primaryImage}
 			<ImageActionContextMenu
-				canDownloadAll={getTaskDownloadableImageCount(task) > 1}
+				canDownloadAll={viewModel.canDownloadAll}
 				canUseAsReference
-				canEditMask={Boolean(task.images[0])}
+				canEditMask={viewModel.canEditMask}
 				onOpen={() => onOpenPreview(task)}
 				onDownload={() => onDownloadPrimary(task)}
 				onDownloadAll={() => onDownloadAll(task)}
 				onCopy={() => onCopyPrimary(task)}
 				onUseAsReference={() => onUsePrimaryReference(task)}
-				onEditMask={() => (task.images[0] ? onEditMask(task) : undefined)}
+				onEditMask={() => (viewModel.canEditMask ? onEditMask(task) : undefined)}
 			>
 				<button
 					type="button"
@@ -121,37 +104,37 @@
 				<Heart class={`size-4 ${task.isFavorite ? 'fill-current' : ''}`} />
 			</button>
 		</div>
-		{#if task.status === 'running' && !previewImages.length}
+		{#if task.status === 'running' && !viewModel.previewImages.length}
 			<div class="absolute inset-0 flex flex-col items-center justify-center gap-3">
 				<LoaderCircle class="text-muted-foreground size-6 animate-spin" />
-				<span class="text-muted-foreground text-sm">生成中 · {formatDuration(getTaskElapsedMs(task))}</span>
-				<span class="text-muted-foreground text-xs">预计 {formatExpectedImageCount(task.params.n)}</span>
+				<span class="text-muted-foreground text-sm">{viewModel.runningElapsedText}</span>
+				<span class="text-muted-foreground text-xs">{viewModel.runningExpectedText}</span>
 			</div>
-		{:else if task.status === 'running' && previewImages.length}
+		{:else if task.status === 'running' && viewModel.previewImages.length}
 			<img
 				class="h-full w-full object-cover opacity-90 transition-transform duration-300 group-hover:scale-[1.02]"
-				src={previewImages.at(-1)}
+				src={viewModel.previewImages.at(-1)}
 				alt={`${task.prompt} partial`}
 			/>
 			<div class="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/65 to-transparent p-3 pt-8 text-xs text-white">
-				生成中 · partial {task.streamPartialImageIds.length} 张
+				{viewModel.runningPartialText}
 			</div>
-		{:else if previewImages.length === 1}
+		{:else if viewModel.previewImages.length === 1}
 			<img
 				class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
-				src={previewImages[0]}
+				src={viewModel.previewImages[0]}
 				alt={task.prompt}
 			/>
-		{:else if previewImages.length > 1}
+		{:else if viewModel.previewImages.length > 1}
 			<div class="grid h-full w-full grid-cols-2 gap-1 p-1">
-				{#each previewImages.slice(0, 4) as image, index}
+				{#each viewModel.previewImages.slice(0, 4) as image, index}
 					<div class="relative overflow-hidden rounded-md">
 						<img class="h-full w-full object-cover" src={image} alt={`${task.prompt} ${index + 1}`} />
-						{#if index === 3 && previewImages.length > 4}
+						{#if index === 3 && viewModel.previewImages.length > 4}
 							<div
 								class="absolute inset-0 flex items-center justify-center bg-black/50 text-sm font-semibold text-white"
 							>
-								+{previewImages.length - 4}
+								+{viewModel.previewImages.length - 4}
 							</div>
 						{/if}
 					</div>
@@ -162,27 +145,25 @@
 				{task.error ?? '没有图片'}
 			</div>
 		{/if}
-		<span class={`absolute top-2 right-2 rounded-full border px-2 py-0.5 text-xs ${getStatusClass(task.status)}`}>
-			{getStatusLabel(task.status)}
+		<span class={`absolute top-2 right-2 rounded-full border px-2 py-0.5 text-xs ${viewModel.statusClass}`}>
+			{viewModel.statusLabel}
 		</span>
 		{#if task.status !== 'running'}
 			<span class="absolute right-2 bottom-2 rounded-full bg-black/60 px-2 py-0.5 text-xs text-white"
-				>{formatImageCountRatio(task.images.length, task.params.n)}</span
+				>{viewModel.imageCountRatio}</span
 			>
 		{/if}
-		{#if task.inputImages.length}
+		{#if viewModel.inputImageCountText}
 			<span class="absolute bottom-2 left-2 rounded-full bg-black/60 px-2 py-0.5 text-xs text-white"
-				>参考图 {task.inputImages.length}</span
+				>{viewModel.inputImageCountText}</span
 			>
 		{/if}
 	</div>
 	<div class="space-y-3 p-3">
 		<div>
 			<p class="line-clamp-2 text-sm font-medium">{task.prompt}</p>
-			<p class="text-muted-foreground mt-1 text-xs">
-				{task.params.size} · {task.params.quality} · {task.params.output_format} · {formatTaskTime(task.createdAt)}
-			</p>
-			<p class="text-muted-foreground mt-1 text-xs">{getTaskProgressText(task)}</p>
+			<p class="text-muted-foreground mt-1 text-xs">{viewModel.detailText}</p>
+			<p class="text-muted-foreground mt-1 text-xs">{viewModel.progressText}</p>
 			{#if task.error && task.status !== 'error'}
 				<p class="mt-1 line-clamp-2 text-xs text-amber-700">{task.error}</p>
 			{/if}
@@ -192,7 +173,7 @@
 				variant="outline"
 				size="xs"
 				onclick={() => onOpen(task)}
-				disabled={!task.images.length && !task.streamPartialImageIds.length}
+				disabled={!viewModel.canOpenPreview}
 			>
 				<Eye class="size-3" />
 				查看
@@ -201,7 +182,7 @@
 				<RotateCcw class="size-3" />
 				复用
 			</Button>
-			<Button variant="ghost" size="xs" onclick={() => onDownloadPrimary(task)} disabled={!primaryImage}>
+			<Button variant="ghost" size="xs" onclick={() => onDownloadPrimary(task)} disabled={!viewModel.canDownloadPrimary}>
 				<Download class="size-3" />
 				下载
 			</Button>
@@ -215,7 +196,7 @@
 				<DropdownMenu.Content align="end" class="w-44">
 					<DropdownMenu.Item
 						onclick={() => onOpen(task)}
-						disabled={!task.images.length && !task.streamPartialImageIds.length}
+						disabled={!viewModel.canOpenPreview}
 					>
 						<Eye class="size-4" />
 						查看详情
@@ -225,15 +206,12 @@
 						{task.isFavorite ? '取消收藏' : '收藏任务'}
 					</DropdownMenu.Item>
 					{#if canDownloadZip}
-						<DropdownMenu.Item
-							onclick={() => onDownloadAll(task)}
-							disabled={!task.images.length && !task.streamPartialImageIds.length}
-						>
+						<DropdownMenu.Item onclick={() => onDownloadAll(task)} disabled={!viewModel.canDownloadZip}>
 							<Download class="size-4" />
 							下载全部 ZIP
 						</DropdownMenu.Item>
 					{/if}
-					<DropdownMenu.Item onclick={() => onUseFirstOutputReference(task)} disabled={!task.images[0]}>
+					<DropdownMenu.Item onclick={() => onUseFirstOutputReference(task)} disabled={!viewModel.canEditMask}>
 						<ImagePlus class="size-4" />
 						首图作参考
 					</DropdownMenu.Item>
