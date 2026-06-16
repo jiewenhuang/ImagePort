@@ -1,11 +1,14 @@
 <script lang="ts">
 	import {
 		Bot,
+		Code,
 		Copy,
 		Download,
+		ExternalLink,
 		FileJson,
 		Info,
 		Plus,
+		RefreshCw,
 		Settings2,
 		SlidersHorizontal,
 		Trash2,
@@ -20,7 +23,13 @@
 	import packageInfo from '../../../../package.json';
 	import type { TaskRecord } from '$lib/domain/types';
 	import type { TaskImportSummary } from '$lib/domain/task-storage';
+	import {
+		checkForGitHubUpdate,
+		GITHUB_REPOSITORY_URL,
+		type UpdateCheckResult
+	} from '$lib/domain/update-check';
 	import type { CleanupImageFilesResult } from '$lib/storage/gallery-db';
+	import { openExternalUrl } from '$lib/storage/external-link';
 	import { saveBlobToFile } from '$lib/storage/native-download';
 	import {
 		buildExportedSettings,
@@ -49,12 +58,19 @@
 		type ZipDownloadRoute
 	} from '$lib/domain/settings';
 	import SettingSwitch from './SettingSwitch.svelte';
-	import { formatStorageBytes, getStorageBytesTone, shouldRefreshStorageBytesForTab } from './gallery-settings-storage';
+	import {
+		formatLoadedTaskCount,
+		formatStorageBytes,
+		getStorageBytesTone,
+		getTaskStorageEstimateLabel,
+		shouldRefreshStorageBytesForTab
+	} from './gallery-settings-storage';
 
 	let {
 		open = $bindable(false),
 		settings = $bindable(),
 		tasks = [],
+		totalTaskCount = null,
 		tasksStorageBytes = null,
 		onClearTasks,
 		onCleanupImages,
@@ -67,6 +83,7 @@
 		open?: boolean;
 		settings: AppSettings;
 		tasks?: TaskRecord[];
+		totalTaskCount?: number | null;
 		tasksStorageBytes?: number | null;
 		onClearTasks: () => void;
 		onCleanupImages: () => Promise<CleanupImageFilesResult>;
@@ -96,8 +113,13 @@
 	let taskImportInput = $state<HTMLInputElement>();
 	let fullBackupImportInput = $state<HTMLInputElement>();
 	let appVersion = $state(packageInfo.version);
+	let isCheckingUpdate = $state(false);
+	let updateCheckResult = $state<UpdateCheckResult | null>(null);
+	let updateCheckError = $state<string | null>(null);
 
 	let activeProfile = $derived(getActiveProfile(settings));
+	let taskCountLabel = $derived(formatLoadedTaskCount(tasks.length, totalTaskCount));
+	let taskStorageEstimateLabel = $derived(getTaskStorageEstimateLabel(tasks.length, totalTaskCount));
 
 	$effect(() => {
 		if (!tasks.length) showClearTasksDialog = false;
@@ -136,6 +158,39 @@
 
 	function updateSettings(patch: Partial<AppSettings>) {
 		settings = normalizeSettings({ ...settings, ...patch });
+	}
+
+	async function checkForUpdates() {
+		if (isCheckingUpdate) return;
+		isCheckingUpdate = true;
+		updateCheckError = null;
+		updateCheckResult = null;
+		try {
+			const result = await checkForGitHubUpdate({ currentVersion: appVersion });
+			updateCheckResult = result;
+			if (result.status === 'update-available') {
+				toast.success('发现新版本', { description: `${result.latest.tagName} 可用` });
+			} else {
+				toast.success('当前已是最新版本', { description: appVersion });
+			}
+		} catch (err) {
+			updateCheckError = err instanceof Error ? err.message : String(err);
+			toast.error('检查更新失败', { description: updateCheckError });
+		} finally {
+			isCheckingUpdate = false;
+		}
+	}
+
+	function openProjectRepository() {
+		void openExternalUrl(GITHUB_REPOSITORY_URL).catch((err) => {
+			toast.error('打开 GitHub 失败', { description: err instanceof Error ? err.message : String(err) });
+		});
+	}
+
+	function openReleaseUrl(url: string) {
+		void openExternalUrl(url).catch((err) => {
+			toast.error('打开 Release 失败', { description: err instanceof Error ? err.message : String(err) });
+		});
 	}
 
 	function switchProfile(profileId: string) {
@@ -924,7 +979,7 @@
 									<div>
 										<h4 class="text-sm font-semibold">完整备份 ZIP</h4>
 										<p class="text-muted-foreground mt-1 text-xs">
-											导出 manifest.json、设置、任务和图片文件；恢复时默认合并导入，不覆盖现有任务。
+											导出设置、当前已加载任务和对应图片文件；恢复时默认合并导入，不覆盖现有任务。
 										</p>
 									</div>
 									<div class="flex shrink-0 gap-2">
@@ -951,15 +1006,15 @@
 								<h4 class="text-sm font-semibold">数据库诊断</h4>
 								<div class="mt-3 grid grid-cols-3 gap-3 text-xs">
 									<div class="rounded-lg border bg-background/70 p-3">
-										<div class="text-muted-foreground">任务数</div>
-										<div class="mt-1 font-medium">{tasks.length}</div>
+										<div class="text-muted-foreground">已加载任务</div>
+										<div class="mt-1 font-medium">{taskCountLabel}</div>
 									</div>
 									<div class="rounded-lg border bg-background/70 p-3">
 										<div class="text-muted-foreground">输出图</div>
 										<div class="mt-1 font-medium">{tasks.reduce((total, task) => total + task.images.length, 0)}</div>
 									</div>
 									<div class="rounded-lg border bg-background/70 p-3">
-										<div class="text-muted-foreground">估算大小</div>
+										<div class="text-muted-foreground">{taskStorageEstimateLabel}</div>
 										<div class="mt-1 font-medium">{formatStorageBytes(tasksStorageBytes)}</div>
 									</div>
 								</div>
@@ -1016,10 +1071,10 @@
 									<div>
 										<h4 class="text-sm font-semibold">导出任务</h4>
 										<p class="text-muted-foreground mt-1 text-xs">
-											导出当前 {tasks.length} 个任务，包含生成图片 data URL。
+											导出当前已加载的 {tasks.length} 个任务，包含生成图片 data URL。
 										</p>
 										<p class={`mt-1 text-xs ${getStorageBytesTone(tasksStorageBytes)}`}>
-											本地任务占用约 {formatStorageBytes(tasksStorageBytes)}。图片较多时建议定期导出并清理。
+											已加载任务导出 JSON 约 {formatStorageBytes(tasksStorageBytes)}。图片较多时建议定期导出并清理。
 										</p>
 									</div>
 									<Button onclick={onExportTasks} disabled={!tasks.length}>
@@ -1121,11 +1176,11 @@
 										<div class="mt-1 font-medium">{appVersion}</div>
 									</div>
 									<div class="rounded-lg border bg-background/70 p-3">
-										<div class="text-muted-foreground">历史任务</div>
-										<div class="mt-1 font-medium">{tasks.length} 个</div>
+										<div class="text-muted-foreground">已加载任务</div>
+										<div class="mt-1 font-medium">{taskCountLabel} 个</div>
 									</div>
 									<div class="rounded-lg border bg-background/70 p-3">
-										<div class="text-muted-foreground">存储估算</div>
+										<div class="text-muted-foreground">{taskStorageEstimateLabel}</div>
 										<div class="mt-1 font-medium">{formatStorageBytes(tasksStorageBytes)}</div>
 									</div>
 									<div class="rounded-lg border bg-background/70 p-3">
@@ -1133,6 +1188,44 @@
 										<div class="mt-1 font-medium">{activeProfile.apiMode}</div>
 									</div>
 								</div>
+								<div class="mt-4 flex flex-wrap gap-2">
+									<Button variant="outline" onclick={openProjectRepository}>
+										<Code class="size-4" />
+										GitHub 仓库
+										<ExternalLink class="size-3" />
+									</Button>
+									<Button variant="outline" onclick={checkForUpdates} disabled={isCheckingUpdate}>
+										<RefreshCw class={`size-4 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
+										{isCheckingUpdate ? '检查中' : '检查更新'}
+									</Button>
+								</div>
+								{#if updateCheckResult}
+									<div class="mt-3 rounded-lg border bg-background/70 p-3 text-sm">
+										{#if updateCheckResult.status === 'update-available'}
+											<div class="font-medium">发现新版本 {updateCheckResult.latest.tagName}</div>
+											<p class="text-muted-foreground mt-1 text-xs">
+												当前版本 {updateCheckResult.currentVersion}，最新版本 {updateCheckResult.latest.version}。
+											</p>
+											<div class="mt-3">
+												<Button
+													size="sm"
+													variant="outline"
+													onclick={() => openReleaseUrl(updateCheckResult!.latest.releaseUrl)}
+												>
+													查看 Release
+													<ExternalLink class="size-3" />
+												</Button>
+											</div>
+										{:else}
+											<div class="font-medium">当前已是最新版本</div>
+											<p class="text-muted-foreground mt-1 text-xs">已检查 GitHub Releases：{updateCheckResult.latest.tagName}</p>
+										{/if}
+									</div>
+								{:else if updateCheckError}
+									<div class="mt-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-xs text-destructive">
+										{updateCheckError}
+									</div>
+								{/if}
 							</section>
 							<section class="rounded-lg border bg-muted/20 p-4 text-sm leading-relaxed">
 								<h4 class="text-sm font-semibold">当前能力</h4>

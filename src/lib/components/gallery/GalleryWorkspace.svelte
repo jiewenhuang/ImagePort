@@ -96,7 +96,7 @@
 		type ApiProfile
 	} from '$lib/domain/settings';
 	import {
-		estimateTasksStorageBytes,
+		estimateTasksStorageBytesAsync,
 		mergeTaskSnapshots,
 		resolveStoredTasks,
 		type TaskImportSummary
@@ -274,6 +274,8 @@
 	let storageBytesRefreshTimer: number | null = null;
 	let storageBytesRefreshFrame: number | null = null;
 	let storageBytesRefreshIdle: number | null = null;
+	let storageBytesRefreshRunId = 0;
+	let storageBytesRefreshAbort: AbortController | null = null;
 	let activeAgentConversation = $derived(
 		agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ??
 			agentConversations[0] ??
@@ -317,6 +319,10 @@
 		if (pruned.length !== selectedTaskIds.length) selectedTaskIds = pruned;
 		if (selectionMode && selectedTaskIds.length === 0) selectionMode = false;
 		if (selectedTaskIds.length === 0) showBulkDeleteDialog = false;
+	});
+
+	$effect(() => {
+		if (!showSettings) cancelTasksStorageBytesRefresh();
 	});
 
 	onMount(() => {
@@ -1248,12 +1254,27 @@
 		openImagesLightbox(images, imageIndex, `${task.prompt} 输入图`, null);
 	}
 
-	function refreshTasksStorageBytes(nextTasks: TaskRecord[] = tasks) {
+	async function refreshTasksStorageBytes(nextTasks: TaskRecord[] = tasks) {
 		cancelTasksStorageBytesRefresh();
-		tasksStorageBytes = estimateTasksStorageBytes(nextTasks);
+		const runId = storageBytesRefreshRunId + 1;
+		storageBytesRefreshRunId = runId;
+		const abortController = new AbortController();
+		storageBytesRefreshAbort = abortController;
+		const bytes = await estimateTasksStorageBytesAsync(nextTasks, {
+			batchSize: 4,
+			signal: abortController.signal,
+			yieldToMainThread: yieldTasksStorageEstimate
+		});
+		if (runId === storageBytesRefreshRunId) {
+			storageBytesRefreshAbort = null;
+			if (bytes != null) tasksStorageBytes = bytes;
+		}
 	}
 
 	function cancelTasksStorageBytesRefresh() {
+		storageBytesRefreshRunId += 1;
+		storageBytesRefreshAbort?.abort();
+		storageBytesRefreshAbort = null;
 		if (storageBytesRefreshFrame != null) {
 			window.cancelAnimationFrame(storageBytesRefreshFrame);
 			storageBytesRefreshFrame = null;
@@ -1269,6 +1290,19 @@
 		}
 	}
 
+	function yieldTasksStorageEstimate(): Promise<void> {
+		const idleWindow = window as Window & {
+			requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+		};
+		return new Promise((resolve) => {
+			if (idleWindow.requestIdleCallback) {
+				idleWindow.requestIdleCallback(resolve, { timeout: 120 });
+				return;
+			}
+			window.setTimeout(resolve, 0);
+		});
+	}
+
 	function scheduleTasksStorageBytesRefresh() {
 		tasksStorageBytes = null;
 		cancelTasksStorageBytesRefresh();
@@ -1277,7 +1311,7 @@
 		};
 		const runRefresh = () => {
 			if (!showSettings) return;
-			refreshTasksStorageBytes();
+			void refreshTasksStorageBytes();
 		};
 		storageBytesRefreshFrame = window.requestAnimationFrame(() => {
 			storageBytesRefreshFrame = null;
@@ -1488,7 +1522,7 @@
 		const tasksToClear = tasks;
 		tasks = [];
 		markAllStoredTasksLoaded(0);
-		refreshTasksStorageBytes([]);
+		void refreshTasksStorageBytes([]);
 		cancelGalleryTaskRequests(tasksToClear.map((task) => task.id));
 		clearTaskSelection();
 		selectedTaskId = null;
@@ -1531,7 +1565,7 @@
 		const file = buildTasksExportFile(tasks);
 		void saveBlobToFile(file.blob, file.fileName)
 			.then((saved) => {
-				if (saved) toast.success('任务已导出', { description: `${tasks.length} 个任务` });
+				if (saved) toast.success('任务已导出', { description: `${tasks.length} 个已加载任务` });
 			})
 			.catch(handleDownloadError);
 	}
@@ -1549,7 +1583,7 @@
 		const summary = await readTaskImportFile(file, tasks);
 		tasks = summary.tasks;
 		markAllStoredTasksLoaded(summary.tasks.length);
-		refreshTasksStorageBytes(summary.tasks);
+		void refreshTasksStorageBytes(summary.tasks);
 		await taskPersistence.persistTasksSnapshot(summary.tasks);
 		toast.success('任务已导入', {
 			description: `新增 ${summary.addedCount} 个，跳过 ${summary.skippedDuplicateCount} 个重复任务`
@@ -1571,7 +1605,7 @@
 		const summary = result.summary;
 		tasks = summary.tasks;
 		markAllStoredTasksLoaded(summary.tasks.length);
-		refreshTasksStorageBytes(summary.tasks);
+		void refreshTasksStorageBytes(summary.tasks);
 		await taskPersistence.persistTasksSnapshot(summary.tasks);
 		toast.success('完整备份已恢复', {
 			description: `新增 ${summary.addedCount} 个任务，跳过 ${summary.skippedDuplicateCount} 个重复任务`
@@ -2023,6 +2057,7 @@
 		bind:open={showSettings}
 		bind:settings
 		{tasks}
+		totalTaskCount={totalStoredTaskCount}
 		{tasksStorageBytes}
 		onClearTasks={clearTasks}
 		onCleanupImages={cleanupImages}

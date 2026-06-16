@@ -17,6 +17,8 @@
     "fs:allow-write-file",
     "fs:allow-mkdir",
     "fs:allow-remove",
+    "opener:allow-default-urls",
+    "opener:allow-open-url",
     {
       "identifier": "fs:scope",
       "allow": [{ "path": "$APPLOCALDATA/images" }, { "path": "$APPLOCALDATA/images/**" }]

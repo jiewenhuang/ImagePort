@@ -23,6 +23,12 @@ export interface TaskSnapshotPersistenceOptions {
 	allowEmpty?: boolean;
 }
 
+export interface AsyncTaskStorageEstimateOptions {
+	batchSize?: number;
+	signal?: AbortSignal;
+	yieldToMainThread?: () => Promise<void>;
+}
+
 export function normalizeTasks(value: unknown): TaskRecord[] {
 	if (!Array.isArray(value)) return [];
 	return value.map(normalizeTask).filter((task): task is TaskRecord => task != null);
@@ -74,6 +80,107 @@ export function createTaskImportSummary(existingTasks: TaskRecord[], importedTas
 
 export function estimateTasksStorageBytes(tasks: TaskRecord[]): number {
 	return new Blob([JSON.stringify(normalizeTasks(tasks))]).size;
+}
+
+export async function estimateTasksStorageBytesAsync(
+	tasks: TaskRecord[],
+	options: AsyncTaskStorageEstimateOptions = {}
+): Promise<number | null> {
+	const batchSize = Math.max(1, Math.trunc(options.batchSize ?? 8));
+	const yieldToMainThread = options.yieldToMainThread ?? defaultYieldToMainThread;
+	let bytes = 1;
+	let taskCount = 0;
+
+	for (let index = 0; index < tasks.length; index += 1) {
+		if (options.signal?.aborted) return null;
+		const normalizedTask = normalizeTask(tasks[index]);
+		if (normalizedTask != null) {
+			if (taskCount > 0) bytes += 1;
+			bytes += estimateJsonBytes(normalizedTask);
+			taskCount += 1;
+		}
+		if ((index + 1) % batchSize === 0 && index < tasks.length - 1) {
+			await yieldToMainThread();
+			if (options.signal?.aborted) return null;
+		}
+	}
+
+	return bytes + 1;
+}
+
+function defaultYieldToMainThread(): Promise<void> {
+	return new Promise((resolve) => {
+		globalThis.setTimeout(resolve, 0);
+	});
+}
+
+function estimateJsonBytes(value: unknown): number {
+	if (value === null) return 4;
+	if (typeof value === 'string') return estimateJsonStringBytes(value);
+	if (typeof value === 'number') return Number.isFinite(value) ? String(value).length : 4;
+	if (typeof value === 'boolean') return value ? 4 : 5;
+	if (Array.isArray(value)) return estimateJsonArrayBytes(value);
+	if (isRecord(value)) return estimateJsonObjectBytes(value);
+	return 0;
+}
+
+function estimateJsonArrayBytes(values: unknown[]): number {
+	let bytes = 2;
+	values.forEach((value, index) => {
+		if (index > 0) bytes += 1;
+		bytes += value === undefined || typeof value === 'function' || typeof value === 'symbol' ? 4 : estimateJsonBytes(value);
+	});
+	return bytes;
+}
+
+function estimateJsonObjectBytes(value: Record<string, unknown>): number {
+	let bytes = 2;
+	let count = 0;
+	for (const [key, item] of Object.entries(value)) {
+		if (item === undefined || typeof item === 'function' || typeof item === 'symbol') continue;
+		if (count > 0) bytes += 1;
+		bytes += estimateJsonStringBytes(key) + 1 + estimateJsonBytes(item);
+		count += 1;
+	}
+	return bytes;
+}
+
+function estimateJsonStringBytes(value: string): number {
+	if (value.startsWith('data:')) return value.length + 2;
+	let bytes = 2;
+	for (let index = 0; index < value.length; index += 1) {
+		const code = value.charCodeAt(index);
+		if (code === 0x22 || code === 0x5c) {
+			bytes += 2;
+			continue;
+		}
+		if (code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d) {
+			bytes += 2;
+			continue;
+		}
+		if (code < 0x20) {
+			bytes += 6;
+			continue;
+		}
+		if (code >= 0xd800 && code <= 0xdbff) {
+			const nextCode = value.charCodeAt(index + 1);
+			if (nextCode >= 0xdc00 && nextCode <= 0xdfff) {
+				bytes += 4;
+				index += 1;
+			} else {
+				bytes += 6;
+			}
+			continue;
+		}
+		if (code >= 0xdc00 && code <= 0xdfff) {
+			bytes += 6;
+			continue;
+		}
+		if (code <= 0x7f) bytes += 1;
+		else if (code <= 0x7ff) bytes += 2;
+		else bytes += 3;
+	}
+	return bytes;
 }
 
 function normalizeTask(value: unknown): TaskRecord | null {

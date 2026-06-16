@@ -3,6 +3,7 @@ import { createEmptyTaskMetadata, DEFAULT_PARAMS, type TaskRecord } from './type
 import {
 	buildExportedTasks,
 	createTaskImportSummary,
+	estimateTasksStorageBytesAsync,
 	estimateTasksStorageBytes,
 	mergeTaskSnapshots,
 	normalizeTasks,
@@ -149,6 +150,43 @@ describe('task import/export', () => {
 	test('estimates serialized task storage size in bytes', () => {
 		expect(estimateTasksStorageBytes([task({ images: ['data:image/png;base64,abcd'] })]) > 0).toBe(true);
 		expect(estimateTasksStorageBytes([])).toBe(2);
+	});
+
+	test('estimates serialized task storage size asynchronously in batches', async () => {
+		let yieldCount = 0;
+		const tasks = [
+			task({ id: 'one', images: ['data:image/png;base64,abcd'] }),
+			task({ id: 'two', inputImages: [{ id: 'input', name: 'input.png', dataUrl: 'data:image/png;base64,input' }] })
+		];
+
+		const estimated = await estimateTasksStorageBytesAsync(tasks, {
+			batchSize: 1,
+			yieldToMainThread: async () => {
+				yieldCount += 1;
+			}
+		});
+
+		expect(estimated).toBe(estimateTasksStorageBytes(tasks));
+		expect(yieldCount > 0).toBe(true);
+	});
+
+	test('cancels asynchronous storage estimates between batches', async () => {
+		const controller = new AbortController();
+		const tasks = [
+			task({ id: 'one', images: ['data:image/png;base64,one'] }),
+			task({ id: 'two', images: ['data:image/png;base64,two'] }),
+			task({ id: 'three', images: ['data:image/png;base64,three'] })
+		];
+
+		const estimated = await estimateTasksStorageBytesAsync(tasks, {
+			batchSize: 1,
+			signal: controller.signal,
+			yieldToMainThread: async () => {
+				controller.abort();
+			}
+		});
+
+		expect(estimated).toBe(null);
 	});
 });
 
