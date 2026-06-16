@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { createEmptyTaskMetadata, DEFAULT_PARAMS, type TaskRecord } from './types';
 import {
 	filterGalleryTasks,
+	getTaskViewportBottomPadding,
 	getSelectedCompletedTasks,
 	getTaskPreviewImages,
 	getVisibleGalleryTasks,
@@ -133,5 +134,11 @@ describe('gallery task helpers', () => {
 				visibleTaskCount: 0
 			})
 		).toBe(false);
+	});
+
+	test('keeps fixed composer clear of the task list bottom controls', () => {
+		expect(getTaskViewportBottomPadding(0)).toBe(32);
+		expect(getTaskViewportBottomPadding(180)).toBe(212);
+		expect(getTaskViewportBottomPadding(260, { gapPx: 24, minimumPx: 40 })).toBe(284);
 	});
 });

@@ -19,6 +19,11 @@ export interface TaskHydrationSkeletonState {
 	visibleTaskCount: number;
 }
 
+export interface TaskViewportBottomPaddingOptions {
+	gapPx?: number;
+	minimumPx?: number;
+}
+
 export function filterGalleryTasks(tasks: TaskRecord[], filter: GalleryTaskFilter): TaskRecord[] {
 	const query = filter.query.trim().toLowerCase();
 	return tasks.filter((task) => {
@@ -42,6 +47,16 @@ export function getVisibleGalleryTasks(tasks: TaskRecord[], page: GalleryTaskPag
 
 export function shouldShowTaskHydrationSkeleton(state: TaskHydrationSkeletonState): boolean {
 	return !state.hasHydratedTasks && !state.taskHydrationFailed && state.visibleTaskCount === 0;
+}
+
+export function getTaskViewportBottomPadding(
+	inputBarHeight: number,
+	options: TaskViewportBottomPaddingOptions = {}
+): number {
+	const safeInputBarHeight = Number.isFinite(inputBarHeight) ? Math.max(0, inputBarHeight) : 0;
+	const gapPx = options.gapPx ?? 32;
+	const minimumPx = options.minimumPx ?? 32;
+	return Math.max(minimumPx, safeInputBarHeight + gapPx);
 }
 
 export function getTaskPreviewImages(task: TaskRecord): string[] {

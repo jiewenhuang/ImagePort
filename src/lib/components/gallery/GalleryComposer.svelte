@@ -10,6 +10,7 @@
 
 	let {
 		appMode,
+		inputBarHeight = $bindable(0),
 		prompt = $bindable(''),
 		agentPrompt = $bindable(''),
 		params = $bindable(),
@@ -39,6 +40,7 @@
 		onEditMask
 	}: {
 		appMode: 'gallery' | 'agent';
+		inputBarHeight?: number;
 		prompt: string;
 		agentPrompt: string;
 		params: TaskParams;
@@ -105,7 +107,11 @@
 	}
 </script>
 
-<div data-input-bar class="pointer-events-none fixed bottom-4 left-1/2 z-30 w-full max-w-4xl -translate-x-1/2 px-3">
+<div
+	data-input-bar
+	bind:clientHeight={inputBarHeight}
+	class="pointer-events-none fixed bottom-4 left-1/2 z-30 w-full max-w-4xl -translate-x-1/2 px-3"
+>
 	<div class="pointer-events-auto w-full">
 		<form
 			class="border-border bg-card/95 rounded-xl border p-3 shadow-2xl backdrop-blur"

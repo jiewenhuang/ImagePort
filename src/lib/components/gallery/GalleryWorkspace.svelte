@@ -47,6 +47,7 @@
 	import {
 		filterGalleryTasks,
 		getSelectedCompletedTasks,
+		getTaskViewportBottomPadding,
 		getVisibleGalleryTasks,
 		pruneSelectedTaskIds,
 		shouldShowTaskHydrationSkeleton,
@@ -194,6 +195,7 @@
 	let showTaskDetail = $state(false);
 	let showMaskEditor = $state(false);
 	let showLightbox = $state(false);
+	let inputBarHeight = $state(0);
 	let selectedTaskId = $state<string | null>(null);
 	let maskEditorImageId = $state<string | null>(null);
 	let lightboxImages = $state<string[]>([]);
@@ -236,6 +238,7 @@
 		})
 	);
 	let hasMoreTasks = $derived(filteredTasks.length > visibleTasks.length || hasMoreStoredTasks);
+	let taskViewportBottomPadding = $derived(getTaskViewportBottomPadding(inputBarHeight));
 	let showTaskHydrationSkeleton = $derived(
 		shouldShowTaskHydrationSkeleton({
 			hasHydratedTasks,
@@ -1711,7 +1714,8 @@
 	<main
 		data-home-main
 		data-drag-select-surface
-		class={`min-h-0 flex-1 overflow-y-auto px-4 pb-8 sm:px-6 ${selectionBox ? 'select-none' : ''}`}
+		class={`min-h-0 flex-1 overflow-y-auto px-4 sm:px-6 ${selectionBox ? 'select-none' : ''}`}
+		style={`padding-bottom:${taskViewportBottomPadding}px;`}
 		ondrop={handleDrop}
 		ondragover={handleDragOver}
 		onpointerdown={startDragSelection}
@@ -1972,6 +1976,7 @@
 
 	<GalleryComposer
 		{appMode}
+		bind:inputBarHeight
 		bind:prompt
 		bind:agentPrompt
 		bind:params
