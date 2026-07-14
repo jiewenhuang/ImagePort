@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
 	DEFAULT_SETTINGS,
+	addApiProfile,
 	addOpenAIProfile,
 	duplicateProfile,
 	getApiProviderLabel,
+	getActiveProfile,
 	importCustomProviderDefinitionFromJson,
 	getProfileRequestBlockReason,
 	getTaskReuseProfile,
@@ -26,6 +28,7 @@ describe('normalizeSettings', () => {
 		expect(settings.profiles[0].baseUrl).toBe('https://api.openai.com/v1');
 		expect(settings.profiles[0].model).toBe('gpt-image-2');
 		expect(settings.profiles[0].apiMode).toBe('images');
+		expect(settings.profiles[0].apiProtocol).toBe('openai-images');
 		expect(settings.clearInputAfterSubmit).toBe(false);
 		expect(settings.persistInputOnRestart).toBe(true);
 		expect(settings.reuseTaskApiProfileTemporarily).toBe(false);
@@ -169,17 +172,126 @@ describe('provider settings', () => {
 	});
 
 	test('switches profile provider with provider-specific defaults', () => {
-		const openai = DEFAULT_SETTINGS.profiles[0];
-		const backToOpenAI = switchApiProfileProvider(openai, 'openai');
+		const openai = { ...DEFAULT_SETTINGS.profiles[0], apiKey: 'openai-key' };
+		const xai = switchApiProfileProvider(openai, 'xai');
+		const backToOpenAI = switchApiProfileProvider({ ...xai, apiKey: 'xai-key' }, 'openai');
 
 		expect(backToOpenAI.provider).toBe('openai');
 		expect(backToOpenAI.baseUrl).toBe(openai.baseUrl);
 		expect(backToOpenAI.model).toBe(openai.model);
+		expect(backToOpenAI.apiKey).toBe('openai-key');
+		expect(xai.apiKey).toBe('');
+	});
+
+	test('creates first-class xAI and Google profiles', () => {
+		const xaiSettings = addApiProfile(DEFAULT_SETTINGS, 'xai', () => 'xai-profile');
+		const xaiProfile = getActiveProfile(xaiSettings);
+		expect(xaiProfile.provider).toBe('xai');
+		expect(xaiProfile.baseUrl).toBe('https://api.x.ai/v1');
+		expect(xaiProfile.model).toBe('grok-imagine-image-quality');
+		expect(xaiProfile.apiProtocol).toBe('xai-imagine');
+
+		const googleSettings = addApiProfile(DEFAULT_SETTINGS, 'google', () => 'google-profile');
+		const googleProfile = getActiveProfile(googleSettings);
+		expect(googleProfile.provider).toBe('google');
+		expect(googleProfile.baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta');
+		expect(googleProfile.model).toBe('gemini-3.1-flash-image');
+		expect(googleProfile.apiProtocol).toBe('gemini-interactions');
+	});
+
+	test('keeps a Gemini model on an explicitly selected OpenAI-compatible protocol', () => {
+		const settings = normalizeSettings({
+			profiles: [
+				{
+					...DEFAULT_SETTINGS.profiles[0],
+					provider: 'google',
+					apiProtocol: 'openai-images',
+					baseUrl: 'https://gateway.example.com/v1',
+					model: 'gemini-image'
+				}
+			]
+		});
+
+		expect(settings.profiles[0].provider).toBe('google');
+		expect(settings.profiles[0].apiProtocol).toBe('openai-images');
+		expect(settings.profiles[0].baseUrl).toBe('https://gateway.example.com/v1');
+	});
+
+	test('migrates legacy profiles to their provider-native protocols', () => {
+		const settings = normalizeSettings({
+			profiles: [
+				{
+					id: 'legacy-google',
+					name: 'Legacy Google',
+					provider: 'google',
+					baseUrl: 'https://proxy.example.com/v1',
+					model: 'gemini-image'
+				},
+				{
+					id: 'legacy-responses',
+					name: 'Legacy Responses',
+					provider: 'openai',
+					apiMode: 'responses',
+					baseUrl: 'https://api.openai.com/v1',
+					model: 'gpt-5.5'
+				}
+			]
+		});
+
+		expect(settings.profiles[0].apiProtocol).toBe('gemini-interactions');
+		expect(settings.profiles[1].apiProtocol).toBe('openai-responses');
+	});
+
+	test('normalizes saved provider drafts against each provider protocol list', () => {
+		const settings = normalizeSettings({
+			profiles: [
+				{
+					...DEFAULT_SETTINGS.profiles[0],
+					providerDrafts: {
+						google: {
+							apiMode: 'responses',
+							apiProtocol: 'openai-responses',
+							responseFormatB64Json: true,
+							streamImages: true
+						},
+						xai: { apiProtocol: 'openai-images' }
+					}
+				}
+			]
+		});
+
+		expect(settings.profiles[0].providerDrafts?.google?.apiProtocol).toBe('gemini-interactions');
+		expect(settings.profiles[0].providerDrafts?.google?.apiMode).toBe('images');
+		expect(settings.profiles[0].providerDrafts?.google?.responseFormatB64Json).toBe(false);
+		expect(settings.profiles[0].providerDrafts?.google?.streamImages).toBe(false);
+		expect(settings.profiles[0].providerDrafts?.xai?.apiProtocol).toBe('openai-images');
+	});
+
+	test('clears response_format for protocols that do not support the setting', () => {
+		const settings = normalizeSettings({
+			profiles: [
+				{
+					...DEFAULT_SETTINGS.profiles[0],
+					apiMode: 'responses',
+					apiProtocol: 'openai-responses',
+					responseFormatB64Json: true
+				}
+			]
+		});
+
+		expect(settings.profiles[0].responseFormatB64Json).toBe(false);
 	});
 
 	test('migrates the previous Responses default model to the current default', () => {
 		const settings = normalizeSettings({
-			profiles: [{ ...DEFAULT_SETTINGS.profiles[0], apiMode: 'responses', model: 'gpt-5.1' }]
+			profiles: [
+				{
+					...DEFAULT_SETTINGS.profiles[0],
+					apiMode: 'responses',
+					apiProtocol: 'openai-responses',
+					model: 'gpt-5.1'
+				}
+			]
 		});
 
 		expect(settings.profiles[0].model).toBe('gpt-5.5');
@@ -219,13 +331,24 @@ describe('download and agent settings helpers', () => {
 
 describe('serializeSettingsForExport', () => {
 	test('omits api keys unless requested', () => {
-		const settings: AppSettings = normalizeSettings({ apiKey: 'sk-secret' });
+		const settings: AppSettings = normalizeSettings({
+			apiKey: 'sk-secret',
+			profiles: [
+				{
+					...DEFAULT_SETTINGS.profiles[0],
+					apiKey: 'sk-secret',
+					providerDrafts: { xai: { apiKey: 'xai-secret' } }
+				}
+			]
+		});
 
 		const safeExport = serializeSettingsForExport(settings, false);
 		const secretExport = serializeSettingsForExport(settings, true);
 
 		expect(safeExport.profiles[0].apiKey).toBe('');
+		expect(safeExport.profiles[0].providerDrafts?.xai?.apiKey).toBe('');
 		expect(secretExport.profiles[0].apiKey).toBe('sk-secret');
+		expect(secretExport.profiles[0].providerDrafts?.xai?.apiKey).toBe('xai-secret');
 	});
 });
 
@@ -236,9 +359,39 @@ describe('getProfileRequestBlockReason', () => {
 		expect(getProfileRequestBlockReason(settings.profiles[0])).toBe(null);
 	});
 
+	test('blocks OpenAI Images on the Google official API URL', () => {
+		const settings = normalizeSettings({
+			profiles: [
+				{
+					...DEFAULT_SETTINGS.profiles[0],
+					provider: 'google',
+					apiProtocol: 'openai-images',
+					baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+					model: 'gemini-image'
+				}
+			]
+		});
+
+		expect(getProfileRequestBlockReason(settings.profiles[0], settings)?.includes('Google 官方地址')).toBe(true);
+		expect(
+			getProfileRequestBlockReason(
+				{ ...settings.profiles[0], baseUrl: 'generativelanguage.googleapis.com/v1beta' },
+				settings
+			)?.includes('Google 官方地址')
+		).toBe(true);
+	});
+
+	test('blocks relative or empty API URLs before native requests', () => {
+		const profile = DEFAULT_SETTINGS.profiles[0];
+
+		expect(getProfileRequestBlockReason({ ...profile, baseUrl: '' })?.includes('HTTP(S)')).toBe(true);
+		expect(getProfileRequestBlockReason({ ...profile, baseUrl: '/v1' })?.includes('HTTP(S)')).toBe(true);
+		expect(getProfileRequestBlockReason({ ...profile, baseUrl: 'gateway.example.com/v1' })).toBe(null);
+	});
+
 	test('allows responses api gallery requests', () => {
 		const settings = normalizeSettings({
-			profiles: [{ ...DEFAULT_SETTINGS.profiles[0], apiMode: 'responses' }]
+			profiles: [{ ...DEFAULT_SETTINGS.profiles[0], apiMode: 'responses', apiProtocol: 'openai-responses' }]
 		});
 
 		expect(getProfileRequestBlockReason(settings.profiles[0], settings)).toBe(null);
@@ -344,7 +497,14 @@ describe('getTaskReuseProfile', () => {
 			reuseTaskApiProfileTemporarily: true,
 			profiles: [
 				{ ...DEFAULT_SETTINGS.profiles[0], id: 'active', name: 'Active', model: 'gpt-image-2' },
-				{ ...DEFAULT_SETTINGS.profiles[0], id: 'matching', name: 'Matching', apiMode: 'responses', model: 'gpt-5.5' }
+				{
+					...DEFAULT_SETTINGS.profiles[0],
+					id: 'matching',
+					name: 'Matching',
+					apiMode: 'responses',
+					apiProtocol: 'openai-responses',
+					model: 'gpt-5.5'
+				}
 			]
 		});
 
@@ -353,6 +513,7 @@ describe('getTaskReuseProfile', () => {
 				apiProfileId: 'deleted-profile',
 				apiProvider: 'openai',
 				apiMode: 'responses',
+				apiProtocol: 'openai-responses',
 				model: 'gpt-5.5'
 			})?.id
 		).toBe('matching');

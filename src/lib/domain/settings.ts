@@ -1,6 +1,8 @@
-export type BuiltInApiProvider = 'openai';
+export type BuiltInApiProvider = 'openai' | 'xai' | 'google';
 export type ApiProvider = BuiltInApiProvider | string;
 export type ApiMode = 'images' | 'responses';
+export type BuiltInImageApiProtocol = 'openai-images' | 'openai-responses' | 'xai-imagine' | 'gemini-interactions';
+export type ImageApiProtocol = BuiltInImageApiProtocol | 'custom';
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask';
 export type CustomProviderRequestMethod = 'GET' | 'POST';
 export type CustomProviderContentType = 'json' | 'multipart';
@@ -10,6 +12,7 @@ interface ReusableTaskProfileSnapshot {
 	apiProfileId?: string | null;
 	apiProvider?: string | null;
 	apiMode?: ApiMode | null;
+	apiProtocol?: string | null;
 	model?: string | null;
 }
 
@@ -79,6 +82,7 @@ export interface ApiProfile {
 	model: string;
 	timeoutSecs: number;
 	apiMode: ApiMode;
+	apiProtocol: ImageApiProtocol;
 	codexCli: boolean;
 	responseFormatB64Json: boolean;
 	streamImages: boolean;
@@ -90,8 +94,10 @@ export interface ApiProfile {
 				Pick<
 					ApiProfile,
 					| 'baseUrl'
+					| 'apiKey'
 					| 'model'
 					| 'apiMode'
+					| 'apiProtocol'
 					| 'codexCli'
 					| 'responseFormatB64Json'
 					| 'streamImages'
@@ -129,6 +135,9 @@ export interface ExportedSettings {
 
 export const DEFAULT_IMAGES_MODEL = 'gpt-image-2';
 export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5';
+export const DEFAULT_XAI_MODEL = 'grok-imagine-image-quality';
+export const DEFAULT_GOOGLE_IMAGE_MODEL = 'gemini-3.1-flash-image';
+export const BUILT_IN_API_PROVIDERS: BuiltInApiProvider[] = ['openai', 'xai', 'google'];
 const LEGACY_DEFAULT_RESPONSES_MODELS = new Set(['gpt-5.1']);
 export const DEFAULT_API_TIMEOUT_SECS = 600;
 export const DEFAULT_STREAM_PARTIAL_IMAGES = 2;
@@ -153,6 +162,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 			model: DEFAULT_IMAGES_MODEL,
 			timeoutSecs: DEFAULT_API_TIMEOUT_SECS,
 			apiMode: 'images',
+			apiProtocol: 'openai-images',
 			codexCli: false,
 			responseFormatB64Json: false,
 			streamImages: false,
@@ -253,13 +263,24 @@ export function getTaskReuseProfile(settings: AppSettings, task: ReusableTaskPro
 	return (
 		settings.profiles.find(
 			(profile) =>
-				profile.provider === task.apiProvider && profile.apiMode === task.apiMode && profile.model === task.model
+				profile.provider === task.apiProvider &&
+				(task.apiProtocol ? profile.apiProtocol === task.apiProtocol : profile.apiMode === task.apiMode) &&
+				profile.model === task.model
 		) ?? null
 	);
 }
 
 export function getProfileRequestBlockReason(profile: ApiProfile, settings?: AppSettings): string | null {
 	if (!isKnownProvider(profile.provider, settings)) return '当前服务商没有可用的生成请求配置';
+	const baseUrl = parseHttpBaseUrl(profile.baseUrl);
+	if (!baseUrl) return 'API URL 必须是有效的 HTTP(S) 地址，例如 https://api.example.com/v1';
+	if (
+		profile.provider === 'google' &&
+		profile.apiProtocol === 'openai-images' &&
+		baseUrl.hostname.toLowerCase() === 'generativelanguage.googleapis.com'
+	) {
+		return 'Google 官方地址不支持 OpenAI Images 协议，请改用 Gemini Interactions，或填写支持 OpenAI Images 的中转地址。';
+	}
 	return null;
 }
 
@@ -319,8 +340,10 @@ export function switchApiProfileProvider(
 		...profile.providerDrafts,
 		[profile.provider]: {
 			baseUrl: profile.baseUrl,
+			apiKey: profile.apiKey,
 			model: profile.model,
 			apiMode: profile.apiMode,
+			apiProtocol: profile.apiProtocol,
 			codexCli: profile.codexCli,
 			responseFormatB64Json: profile.responseFormatB64Json,
 			streamImages: profile.streamImages,
@@ -329,13 +352,17 @@ export function switchApiProfileProvider(
 	};
 	const savedDraft = providerDrafts[provider];
 	const defaultProfile = createDefaultProfile(provider, profile.id, customProvider);
+	const restoredApiProtocol =
+		savedDraft?.apiProtocol ?? getDefaultImageApiProtocol(provider, savedDraft?.apiMode ?? defaultProfile.apiMode);
 
 	return {
 		...profile,
 		provider: defaultProfile.provider,
 		baseUrl: savedDraft?.baseUrl ?? defaultProfile.baseUrl,
+		apiKey: savedDraft?.apiKey ?? defaultProfile.apiKey,
 		model: savedDraft?.model ?? defaultProfile.model,
-		apiMode: savedDraft?.apiMode ?? defaultProfile.apiMode,
+		apiProtocol: restoredApiProtocol,
+		apiMode: getApiModeForProtocol(restoredApiProtocol),
 		codexCli: savedDraft?.codexCli ?? defaultProfile.codexCli,
 		responseFormatB64Json: savedDraft?.responseFormatB64Json ?? defaultProfile.responseFormatB64Json,
 		streamImages: savedDraft?.streamImages ?? defaultProfile.streamImages,
@@ -362,7 +389,15 @@ export function serializeSettingsForExport(settings: AppSettings, includeApiKeys
 		...normalized,
 		profiles: normalized.profiles.map((profile) => ({
 			...profile,
-			apiKey: includeApiKeys ? profile.apiKey : ''
+			apiKey: includeApiKeys ? profile.apiKey : '',
+			providerDrafts: profile.providerDrafts
+				? Object.fromEntries(
+						Object.entries(profile.providerDrafts).map(([provider, draft]) => [
+							provider,
+							{ ...draft, apiKey: includeApiKeys ? draft?.apiKey : '' }
+						])
+					)
+				: undefined
 		}))
 	};
 }
@@ -384,7 +419,7 @@ export function getCustomProviderDefinition(
 	settings: AppSettings | Partial<AppSettings> | unknown,
 	provider: ApiProvider
 ): CustomProviderDefinition | null {
-	if (provider === 'openai') return null;
+	if (isBuiltInProvider(provider)) return null;
 	if (!isRecord(settings)) return null;
 	const providers = normalizeCustomProviderDefinitions(settings.customProviders);
 	return providers.find((item) => item.id === provider) ?? null;
@@ -395,7 +430,51 @@ export function getApiProviderLabel(
 	provider: ApiProvider
 ): string {
 	if (provider === 'openai') return 'OpenAI Compatible';
+	if (provider === 'xai') return 'xAI Grok Imagine';
+	if (provider === 'google') return 'Google Nano Banana';
 	return getCustomProviderDefinition(settings, provider)?.name ?? provider;
+}
+
+export function getDefaultProviderModel(provider: ApiProvider, apiMode: ApiMode = 'images'): string {
+	if (provider === 'xai') return DEFAULT_XAI_MODEL;
+	if (provider === 'google') return DEFAULT_GOOGLE_IMAGE_MODEL;
+	return apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL;
+}
+
+export function getDefaultImageApiProtocol(provider: ApiProvider, apiMode: ApiMode = 'images'): ImageApiProtocol {
+	if (provider === 'xai') return 'xai-imagine';
+	if (provider === 'google') return 'gemini-interactions';
+	if (provider === 'openai') return apiMode === 'responses' ? 'openai-responses' : 'openai-images';
+	return 'custom';
+}
+
+export function getAvailableImageApiProtocols(provider: ApiProvider): ImageApiProtocol[] {
+	if (provider === 'google') return ['gemini-interactions', 'openai-images'];
+	if (provider === 'xai') return ['xai-imagine', 'openai-images'];
+	if (provider === 'openai') return ['openai-images', 'openai-responses'];
+	return ['custom'];
+}
+
+export function getImageApiProtocolLabel(protocol: ImageApiProtocol): string {
+	if (protocol === 'openai-images') return 'OpenAI Images';
+	if (protocol === 'openai-responses') return 'OpenAI Responses';
+	if (protocol === 'xai-imagine') return 'xAI Imagine Images';
+	if (protocol === 'gemini-interactions') return 'Gemini Interactions';
+	return '自定义 Manifest';
+}
+
+export function getApiModeForProtocol(protocol: ImageApiProtocol): ApiMode {
+	return protocol === 'openai-responses' ? 'responses' : 'images';
+}
+
+export function supportsResponseFormatB64Json(protocol: ImageApiProtocol): boolean {
+	return protocol === 'openai-images' || protocol === 'xai-imagine' || protocol === 'custom';
+}
+
+export function getDefaultProviderBaseUrl(provider: ApiProvider): string {
+	if (provider === 'xai') return 'https://api.x.ai/v1';
+	if (provider === 'google') return 'https://generativelanguage.googleapis.com/v1beta';
+	return 'https://api.openai.com/v1';
 }
 
 export function importCustomProviderDefinitionFromJson(
@@ -445,9 +524,15 @@ export function normalizeZipDownloadRoutes(value: unknown): ZipDownloadRoute[] {
 function normalizeProfile(value: unknown, customProviderIds = new Set<string>()): ApiProfile | null {
 	if (!isRecord(value)) return null;
 	const rawProvider = typeof value.provider === 'string' ? value.provider.trim() : 'openai';
-	const provider: ApiProvider = rawProvider === 'openai' || customProviderIds.has(rawProvider) ? rawProvider : 'openai';
+	const provider: ApiProvider =
+		isBuiltInProvider(rawProvider) || customProviderIds.has(rawProvider) ? rawProvider : 'openai';
 	const wasRemovedProvider = provider !== rawProvider;
-	const apiMode = wasRemovedProvider ? 'images' : value.apiMode === 'responses' ? 'responses' : 'images';
+	const legacyApiMode =
+		wasRemovedProvider || provider !== 'openai' ? 'images' : value.apiMode === 'responses' ? 'responses' : 'images';
+	const apiProtocol = wasRemovedProvider
+		? 'openai-images'
+		: normalizeImageApiProtocol(value.apiProtocol, provider, legacyApiMode);
+	const apiMode = getApiModeForProtocol(apiProtocol);
 	const defaultProfile = createDefaultProfile(provider, DEFAULT_PROFILE_ID);
 	const defaultModel = apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : defaultProfile.model;
 	const rawModel = getString(value.model, defaultModel);
@@ -463,8 +548,12 @@ function normalizeProfile(value: unknown, customProviderIds = new Set<string>())
 		model,
 		timeoutSecs: normalizeTimeoutSecs(getNumber(value.timeoutSecs, DEFAULT_API_TIMEOUT_SECS)),
 		apiMode,
-		codexCli: provider === 'openai' ? getBoolean(value.codexCli, false) : false,
-		responseFormatB64Json: wasRemovedProvider ? false : getBoolean(value.responseFormatB64Json, false),
+		apiProtocol,
+		codexCli: apiProtocol.startsWith('openai-') ? getBoolean(value.codexCli, false) : false,
+		responseFormatB64Json:
+			!wasRemovedProvider && supportsResponseFormatB64Json(apiProtocol)
+				? getBoolean(value.responseFormatB64Json, false)
+				: false,
 		streamImages: provider === 'openai' && !wasRemovedProvider ? getBoolean(value.streamImages, false) : false,
 		streamPartialImages: normalizeStreamPartialImages(value.streamPartialImages),
 		providerDrafts: normalizeProviderDrafts(value.providerDrafts, customProviderIds)
@@ -483,6 +572,22 @@ function createDefaultProfile(
 			name: '新配置',
 			provider: customProvider.id,
 			apiMode: 'images',
+			apiProtocol: 'custom',
+			codexCli: false,
+			responseFormatB64Json: false,
+			streamImages: false
+		};
+	}
+	if (provider === 'xai' || provider === 'google') {
+		return {
+			...DEFAULT_SETTINGS.profiles[0],
+			id,
+			name: provider === 'xai' ? 'xAI Grok' : 'Google Nano Banana',
+			provider,
+			baseUrl: getDefaultProviderBaseUrl(provider),
+			model: getDefaultProviderModel(provider),
+			apiMode: 'images',
+			apiProtocol: getDefaultImageApiProtocol(provider),
 			codexCli: false,
 			responseFormatB64Json: false,
 			streamImages: false
@@ -502,6 +607,14 @@ function isLegacyDefaultModel(apiMode: ApiMode, model: string): boolean {
 	return apiMode === 'responses' && LEGACY_DEFAULT_RESPONSES_MODELS.has(model.trim());
 }
 
+function normalizeImageApiProtocol(value: unknown, provider: ApiProvider, legacyApiMode: ApiMode): ImageApiProtocol {
+	const available = getAvailableImageApiProtocols(provider);
+	if (typeof value === 'string' && available.includes(value as ImageApiProtocol)) {
+		return value as ImageApiProtocol;
+	}
+	return getDefaultImageApiProtocol(provider, legacyApiMode);
+}
+
 function dedupeProfiles(profiles: ApiProfile[]): ApiProfile[] {
 	const used = new Set<string>();
 	return profiles.map((profile, index) => {
@@ -513,7 +626,7 @@ function dedupeProfiles(profiles: ApiProfile[]): ApiProfile[] {
 }
 
 function createProfileId(provider: ApiProvider = 'openai'): string {
-	const prefix = provider === 'openai' ? 'openai' : 'custom';
+	const prefix = isBuiltInProvider(provider) ? provider : 'custom';
 	if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return `${prefix}-${crypto.randomUUID()}`;
 	return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -668,23 +781,29 @@ function normalizeFileMappings(
 function normalizeProviderDrafts(input: unknown, customProviderIds: Set<string>): ApiProfile['providerDrafts'] {
 	if (!isRecord(input)) return undefined;
 	const entries = Object.entries(input)
-		.filter(([provider]) => provider === 'openai' || customProviderIds.has(provider))
-		.map(([provider, draft]) => [provider, normalizeProviderDraft(draft)] as const)
+		.filter(([provider]) => isBuiltInProvider(provider) || customProviderIds.has(provider))
+		.map(([provider, draft]) => [provider, normalizeProviderDraft(provider, draft)] as const)
 		.filter((entry): entry is [string, NonNullable<ReturnType<typeof normalizeProviderDraft>>] => Boolean(entry[1]));
 	return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
-function normalizeProviderDraft(input: unknown) {
+function normalizeProviderDraft(provider: ApiProvider, input: unknown) {
 	if (!isRecord(input)) return undefined;
-	const apiMode: ApiMode | undefined =
+	const legacyApiMode: ApiMode | undefined =
 		input.apiMode === 'responses' || input.apiMode === 'images' ? input.apiMode : undefined;
+	const apiProtocol = normalizeImageApiProtocol(input.apiProtocol, provider, legacyApiMode ?? 'images');
 	return {
 		baseUrl: typeof input.baseUrl === 'string' ? input.baseUrl : undefined,
+		apiKey: typeof input.apiKey === 'string' ? input.apiKey : undefined,
 		model: typeof input.model === 'string' ? input.model : undefined,
-		apiMode,
-		codexCli: typeof input.codexCli === 'boolean' ? input.codexCli : undefined,
-		responseFormatB64Json: typeof input.responseFormatB64Json === 'boolean' ? input.responseFormatB64Json : undefined,
-		streamImages: typeof input.streamImages === 'boolean' ? input.streamImages : undefined,
+		apiMode: getApiModeForProtocol(apiProtocol),
+		apiProtocol,
+		codexCli: apiProtocol.startsWith('openai-') && typeof input.codexCli === 'boolean' ? input.codexCli : false,
+		responseFormatB64Json:
+			supportsResponseFormatB64Json(apiProtocol) && typeof input.responseFormatB64Json === 'boolean'
+				? input.responseFormatB64Json
+				: false,
+		streamImages: provider === 'openai' && typeof input.streamImages === 'boolean' ? input.streamImages : false,
 		streamPartialImages: normalizeStreamPartialImages(input.streamPartialImages)
 	};
 }
@@ -736,12 +855,24 @@ function stripMarkdownCodeFence(text: string): string {
 }
 
 function isBuiltInProvider(provider: string): provider is BuiltInApiProvider {
-	return provider === 'openai';
+	return BUILT_IN_API_PROVIDERS.includes(provider as BuiltInApiProvider);
 }
 
 function isKnownProvider(provider: ApiProvider, settings?: AppSettings): boolean {
-	if (provider === 'openai') return true;
+	if (isBuiltInProvider(provider)) return true;
 	return Boolean(settings?.customProviders.some((item) => item.id === provider));
+}
+
+function parseHttpBaseUrl(value: string): URL | null {
+	const trimmed = value.trim();
+	if (!trimmed || /^(?:\/|\.{1,2}\/)/.test(trimmed)) return null;
+	const input = /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
+	try {
+		const url = new URL(input);
+		return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname ? url : null;
+	} catch {
+		return null;
+	}
 }
 
 function normalizeFavoriteCollectionSettings(value: unknown): FavoriteCollectionSetting[] {

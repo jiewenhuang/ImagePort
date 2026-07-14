@@ -6,27 +6,24 @@
 
 	type Mode = 'auto' | 'ratio' | 'resolution';
 
-	const tiers: SizeTier[] = ['1K', '2K', '4K'];
-	const ratios = [
-		{ label: '1:1', value: '1:1' },
-		{ label: '3:2', value: '3:2' },
-		{ label: '2:3', value: '2:3' },
-		{ label: '16:9', value: '16:9' },
-		{ label: '9:16', value: '9:16' },
-		{ label: '4:3', value: '4:3' },
-		{ label: '3:4', value: '3:4' },
-		{ label: '21:9', value: '21:9' }
-	];
+	const defaultTiers: SizeTier[] = ['1K', '2K', '4K'];
+	const defaultRatios = ['1:1', '3:2', '2:3', '16:9', '9:16', '4:3', '3:4', '21:9'];
 
 	const sizeLimitText = '会自动规整到合法尺寸：16 的倍数，最大边长 3840px，宽高比不超过 3:1。';
 
 	let {
 		open = $bindable(false),
 		currentSize = 'auto',
+		availableTiers = defaultTiers,
+		availableRatios = defaultRatios,
+		allowExactSize = true,
 		onSelect
 	}: {
 		open?: boolean;
 		currentSize?: string;
+		availableTiers?: SizeTier[];
+		availableRatios?: string[];
+		allowExactSize?: boolean;
 		onSelect: (size: string) => void;
 	} = $props();
 
@@ -38,6 +35,7 @@
 	let customHeight = $state('1024');
 
 	let activeRatio = $derived(ratio === 'custom' ? customRatio : ratio);
+	let ratioOptions = $derived(availableRatios.map((value) => ({ label: value, value })));
 	let customRatioValid = $derived(ratio !== 'custom' || Boolean(parseRatio(customRatio)));
 	let previewSize = $derived.by(() => {
 		if (mode === 'auto') return 'auto';
@@ -53,7 +51,10 @@
 	});
 
 	$effect(() => {
-		if (open) mode = currentSize === 'auto' ? 'auto' : 'ratio';
+		if (!open) return;
+		mode = currentSize === 'auto' ? 'auto' : 'ratio';
+		if (!availableTiers.includes(tier)) tier = availableTiers[0] ?? '1K';
+		if (!availableRatios.includes(ratio)) ratio = availableRatios[0] ?? '1:1';
 	});
 
 	function close() {
@@ -96,7 +97,7 @@
 			</header>
 
 			<div class="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-				<div class="bg-muted mb-5 grid grid-cols-3 rounded-lg p-1">
+				<div class={`bg-muted mb-5 grid ${allowExactSize ? 'grid-cols-3' : 'grid-cols-2'} rounded-lg p-1`}>
 					<button
 						class={`rounded-md px-3 py-2 text-sm font-medium transition ${mode === 'auto' ? 'bg-background shadow-xs' : 'text-muted-foreground hover:text-foreground'}`}
 						onclick={() => (mode = 'auto')}>自动</button
@@ -105,10 +106,12 @@
 						class={`rounded-md px-3 py-2 text-sm font-medium transition ${mode === 'ratio' ? 'bg-background shadow-xs' : 'text-muted-foreground hover:text-foreground'}`}
 						onclick={() => (mode = 'ratio')}>按比例</button
 					>
-					<button
-						class={`rounded-md px-3 py-2 text-sm font-medium transition ${mode === 'resolution' ? 'bg-background shadow-xs' : 'text-muted-foreground hover:text-foreground'}`}
-						onclick={() => (mode = 'resolution')}>自定义宽高</button
-					>
+					{#if allowExactSize}
+						<button
+							class={`rounded-md px-3 py-2 text-sm font-medium transition ${mode === 'resolution' ? 'bg-background shadow-xs' : 'text-muted-foreground hover:text-foreground'}`}
+							onclick={() => (mode = 'resolution')}>自定义宽高</button
+						>
+					{/if}
 				</div>
 
 				{#if mode === 'auto'}
@@ -126,7 +129,7 @@
 						<section>
 							<div class="text-muted-foreground mb-2 text-xs font-medium">基准分辨率</div>
 							<div class="grid grid-cols-3 gap-2">
-								{#each tiers as item}
+								{#each availableTiers as item}
 									<button
 										class={`rounded-lg border px-3 py-2 text-sm transition ${buttonClass(tier === item)}`}
 										onclick={() => (tier = item)}
@@ -140,7 +143,7 @@
 						<section>
 							<div class="text-muted-foreground mb-2 text-xs font-medium">图像比例</div>
 							<div class="grid grid-cols-4 gap-2">
-								{#each ratios as item}
+								{#each ratioOptions as item}
 									{@const parts = item.value.split(':').map(Number)}
 									{@const wide = parts[0] > parts[1]}
 									{@const square = parts[0] === parts[1]}

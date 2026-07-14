@@ -93,6 +93,7 @@ describe('normalizeTasks', () => {
 				apiProfileName: 'Work',
 				apiProvider: 'openai',
 				apiMode: 'images',
+				apiProtocol: 'openai-images',
 				model: 'gpt-image-2',
 				rawImageUrls: ['https://example.com/image.png'],
 				rawResponsePayload: '{"data":[]}',
@@ -107,6 +108,7 @@ describe('normalizeTasks', () => {
 		expect(tasks[0].apiProfileName).toBe('Work');
 		expect(tasks[0].apiProvider).toBe('openai');
 		expect(tasks[0].apiMode).toBe('images');
+		expect(tasks[0].apiProtocol).toBe('openai-images');
 		expect(tasks[0].model).toBe('gpt-image-2');
 		expect(tasks[0].rawImageUrls).toEqual(['https://example.com/image.png']);
 		expect(tasks[0].rawResponsePayload).toBe('{"data":[]}');

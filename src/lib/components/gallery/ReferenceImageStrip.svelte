@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ImagePlus, Pencil, Trash2, X } from '@lucide/svelte';
+	import { Eraser, ImagePlus, Pencil, Trash2, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import type { InputImage, MaskDraft } from '$lib/domain/types';
 
@@ -9,7 +9,13 @@
 		onAdd,
 		onRemove,
 		onClear,
-		onEditMask
+		onEditMask,
+		onClearMask,
+		maxImages,
+		imageEditSupported,
+		imageEditUnsupportedReason,
+		maskSupported,
+		maskUnsupportedReason
 	}: {
 		images: InputImage[];
 		mask: MaskDraft | null;
@@ -17,6 +23,12 @@
 		onRemove: (id: string) => void;
 		onClear: () => void;
 		onEditMask: (id: string) => void;
+		onClearMask: () => void;
+		maxImages: number;
+		imageEditSupported: boolean;
+		imageEditUnsupportedReason: string | null;
+		maskSupported: boolean;
+		maskUnsupportedReason: string | null;
 	} = $props();
 </script>
 
@@ -39,9 +51,11 @@
 				{/if}
 				<button
 					type="button"
-					class="absolute inset-0 flex items-center justify-center bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100"
+					class="absolute inset-0 flex items-center justify-center bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 disabled:cursor-not-allowed disabled:text-white/60"
 					onclick={() => onEditMask(image.id)}
+					disabled={!maskSupported}
 					aria-label="编辑遮罩"
+					title={maskSupported ? '编辑遮罩' : (maskUnsupportedReason ?? '当前模型不支持遮罩')}
 				>
 					<Pencil class="size-4" />
 				</button>
@@ -65,7 +79,13 @@
 		size="icon-lg"
 		class="size-14 shrink-0 rounded-lg border-dashed"
 		onclick={onAdd}
+		disabled={!imageEditSupported || images.length >= maxImages}
 		aria-label="添加参考图"
+		title={!imageEditSupported
+			? (imageEditUnsupportedReason ?? '当前服务商不支持参考图编辑')
+			: images.length >= maxImages
+				? `当前模型最多支持 ${maxImages} 张参考图`
+				: '添加参考图'}
 	>
 		<ImagePlus class="size-5" />
 	</Button>
@@ -79,6 +99,19 @@
 			aria-label="清空参考图"
 		>
 			<Trash2 class="size-5" />
+		</Button>
+	{/if}
+
+	{#if mask}
+		<Button
+			variant="ghost"
+			size="icon-lg"
+			class="size-14 shrink-0 rounded-lg text-muted-foreground"
+			onclick={onClearMask}
+			aria-label="清除蒙版"
+			title="清除当前蒙版"
+		>
+			<Eraser class="size-5" />
 		</Button>
 	{/if}
 </div>

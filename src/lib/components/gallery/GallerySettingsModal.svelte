@@ -1,6 +1,7 @@
 <script lang="ts">
 	import {
 		Bot,
+		ChevronDown,
 		Code,
 		Copy,
 		Download,
@@ -19,15 +20,12 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Select } from '$lib/components/ui/select';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { toast } from 'svelte-sonner';
 	import packageInfo from '../../../../package.json';
 	import type { TaskRecord } from '$lib/domain/types';
 	import type { TaskImportSummary } from '$lib/domain/task-storage';
-	import {
-		checkForGitHubUpdate,
-		GITHUB_REPOSITORY_URL,
-		type UpdateCheckResult
-	} from '$lib/domain/update-check';
+	import { checkForGitHubUpdate, GITHUB_REPOSITORY_URL, type UpdateCheckResult } from '$lib/domain/update-check';
 	import type { CleanupImageFilesResult } from '$lib/storage/gallery-db';
 	import { openExternalUrl } from '$lib/storage/external-link';
 	import { saveBlobToFile } from '$lib/storage/native-download';
@@ -39,7 +37,14 @@
 		addOpenAIProfile,
 		duplicateProfile,
 		getApiProviderLabel,
+		getApiModeForProtocol,
 		getActiveProfile,
+		getAvailableImageApiProtocols,
+		getDefaultImageApiProtocol,
+		getDefaultProviderBaseUrl,
+		getDefaultProviderModel,
+		getImageApiProtocolLabel,
+		getProfileRequestBlockReason,
 		importCustomProviderDefinitionFromJson,
 		normalizeSettings,
 		normalizeAgentMaxToolRounds,
@@ -50,13 +55,18 @@
 		removeCustomProvider,
 		removeProfile,
 		switchApiProfileProvider,
+		supportsResponseFormatB64Json,
 		type AppSettings,
-		type ApiMode,
+		type ApiProfile,
 		type ApiProvider,
 		type CustomProviderDefinition,
+		type ImageApiProtocol,
 		type ReferenceImageEditAction,
 		type ZipDownloadRoute
 	} from '$lib/domain/settings';
+	import { buildApiUrl } from '$lib/domain/url';
+	import { getProviderCapabilities } from '$lib/domain/provider-capabilities';
+	import { getImageApiProtocolWarning, resolveImageApiEndpoint } from '$lib/api/providers/registry';
 	import SettingSwitch from './SettingSwitch.svelte';
 	import {
 		formatLoadedTaskCount,
@@ -118,6 +128,12 @@
 	let updateCheckError = $state<string | null>(null);
 
 	let activeProfile = $derived(getActiveProfile(settings));
+	let activeCapabilities = $derived(getProviderCapabilities(activeProfile, settings));
+	let activeProtocolOptions = $derived(getAvailableImageApiProtocols(activeProfile.provider));
+	let activeEndpointPreview = $derived(getProfileEndpointPreview(activeProfile));
+	let activeProfileBlockReason = $derived(getProfileRequestBlockReason(activeProfile, settings));
+	let activeProtocolWarning = $derived(getImageApiProtocolWarning(activeProfile));
+	let isUsingOfficialConnection = $derived(isOfficialConnection(activeProfile));
 	let taskCountLabel = $derived(formatLoadedTaskCount(tasks.length, totalTaskCount));
 	let taskStorageEstimateLabel = $derived(getTaskStorageEstimateLabel(tasks.length, totalTaskCount));
 
@@ -205,6 +221,10 @@
 		settings = addOpenAIProfile(settings);
 	}
 
+	function createBuiltInProfile(provider: 'xai' | 'google') {
+		createProfileForProvider(provider);
+	}
+
 	function createProfileForProvider(provider: ApiProvider) {
 		pendingDeleteProfileId = null;
 		showClearTasksDialog = false;
@@ -259,22 +279,68 @@
 		updateSettings({ zipDownloadRoutes: normalizeZipDownloadRoutes([...current]) });
 	}
 
-	function updateApiMode(event: Event) {
-		const apiMode = (event.currentTarget as HTMLSelectElement).value as ApiMode;
+	function updateApiProtocol(event: Event) {
+		const apiProtocol = (event.currentTarget as HTMLSelectElement).value as ImageApiProtocol;
+		const apiMode = getApiModeForProtocol(apiProtocol);
 		const currentModel = activeProfile.model.trim();
+		const switchingOpenAiMode =
+			(activeProfile.apiProtocol === 'openai-images' && apiProtocol === 'openai-responses') ||
+			(activeProfile.apiProtocol === 'openai-responses' && apiProtocol === 'openai-images');
 		const shouldUseDefaultModel =
-			currentModel === DEFAULT_IMAGES_MODEL ||
-			currentModel === DEFAULT_RESPONSES_MODEL ||
-			currentModel === 'gpt-5.1' ||
-			!currentModel;
+			switchingOpenAiMode &&
+			(currentModel === DEFAULT_IMAGES_MODEL ||
+				currentModel === DEFAULT_RESPONSES_MODEL ||
+				currentModel === 'gpt-5.1' ||
+				!currentModel);
 		updateActiveProfile({
+			apiProtocol,
 			apiMode,
 			model: shouldUseDefaultModel
 				? apiMode === 'responses'
 					? DEFAULT_RESPONSES_MODEL
 					: DEFAULT_IMAGES_MODEL
-				: activeProfile.model
+				: activeProfile.model,
+			codexCli: apiProtocol.startsWith('openai-') ? activeProfile.codexCli : false,
+			streamImages: apiProtocol.startsWith('openai-') ? activeProfile.streamImages : false,
+			responseFormatB64Json: supportsResponseFormatB64Json(apiProtocol) ? activeProfile.responseFormatB64Json : false
 		});
+	}
+
+	function applyOfficialConnectionPreset() {
+		if (!isBuiltInProfileProvider(activeProfile.provider)) return;
+		const apiProtocol = getDefaultImageApiProtocol(activeProfile.provider);
+		updateActiveProfile({
+			baseUrl: getDefaultProviderBaseUrl(activeProfile.provider),
+			apiProtocol,
+			apiMode: getApiModeForProtocol(apiProtocol),
+			codexCli: false,
+			streamImages: false,
+			responseFormatB64Json: supportsResponseFormatB64Json(apiProtocol) ? activeProfile.responseFormatB64Json : false
+		});
+		toast.success('已恢复官方连接', { description: getApiProviderLabel(settings, activeProfile.provider) });
+	}
+
+	function isBuiltInProfileProvider(provider: ApiProvider): provider is 'openai' | 'xai' | 'google' {
+		return provider === 'openai' || provider === 'xai' || provider === 'google';
+	}
+
+	function isOfficialConnection(profile: ApiProfile): boolean {
+		if (!isBuiltInProfileProvider(profile.provider)) return false;
+		return (
+			profile.apiProtocol === getDefaultImageApiProtocol(profile.provider) &&
+			profile.baseUrl.trim().replace(/\/+$/, '') === getDefaultProviderBaseUrl(profile.provider)
+		);
+	}
+
+	function getProfileEndpointPreview(profile: ApiProfile): { method: string; url: string } | null {
+		const builtInEndpoint = resolveImageApiEndpoint(profile);
+		if (builtInEndpoint) return { method: 'POST', url: builtInEndpoint };
+		const customProvider = settings.customProviders.find((provider) => provider.id === profile.provider);
+		if (!customProvider) return null;
+		return {
+			method: customProvider.submit.method ?? 'POST',
+			url: buildApiUrl(profile.baseUrl, customProvider.submit.path)
+		};
 	}
 
 	function importCustomProvider() {
@@ -571,13 +637,15 @@
 			</aside>
 
 			<div class="flex min-h-0 flex-col">
-				<header class="border-border border-b px-5 py-4">
+				<header class={`border-border border-b px-5 ${activeTab === 'api' ? 'py-4' : 'py-3.5'}`}>
 					<h3 class="text-sm font-semibold">
 						{getTabTitle()}
 					</h3>
-					<p class="text-muted-foreground mt-1 text-xs">
-						{getTabDescription()}
-					</p>
+					{#if activeTab !== 'api'}
+						<p class="text-muted-foreground mt-1 text-xs">
+							{getTabDescription()}
+						</p>
+					{/if}
 				</header>
 
 				<div class="min-h-0 flex-1 overflow-y-auto p-5">
@@ -585,39 +653,65 @@
 						<div class="grid gap-4">
 							<section class="rounded-lg border bg-muted/20 p-3">
 								<div class="mb-3 flex items-center justify-between gap-3">
-									<div>
-										<h4 class="text-sm font-semibold">API 配置组</h4>
-										<p class="text-muted-foreground mt-1 text-xs">为不同模型、代理或环境保存独立配置。</p>
+									<div class="flex items-center gap-2">
+										<h4 class="text-sm font-semibold">API 连接</h4>
+										<span
+											class="text-muted-foreground rounded-full border bg-background px-1.5 py-0.5 text-[10px] tabular-nums"
+										>
+											{settings.profiles.length}
+										</span>
 									</div>
 									<div class="flex shrink-0 items-center gap-1.5">
-										<Button
-											type="button"
-											variant="outline"
-											size="icon-sm"
-											onclick={createProfile}
-											aria-label="新建配置"
-											title="新建配置"
-										>
-											<Plus class="size-4" />
-										</Button>
-										{#if settings.customProviders.length}
-											<Button
-												type="button"
-												variant="outline"
-												size="sm"
-												onclick={() => createProfileForProvider(settings.customProviders[0].id)}
-												title="新建自定义服务商配置"
-											>
-												自定义
-											</Button>
-										{/if}
+										<DropdownMenu.Root>
+											<DropdownMenu.Trigger>
+												<Button type="button" variant="outline" size="sm">
+													<Plus class="size-4" />
+													添加连接
+													<ChevronDown class="text-muted-foreground size-3.5" />
+												</Button>
+											</DropdownMenu.Trigger>
+											<DropdownMenu.Content align="end" class="w-64">
+												<DropdownMenu.Item class="items-start py-2.5" onclick={createProfile}>
+													<div class="grid gap-0.5">
+														<span class="font-medium">OpenAI 兼容</span>
+														<span class="text-muted-foreground text-xs">Images / Responses</span>
+													</div>
+												</DropdownMenu.Item>
+												<DropdownMenu.Item class="items-start py-2.5" onclick={() => createBuiltInProfile('xai')}>
+													<div class="grid gap-0.5">
+														<span class="font-medium">xAI 官方</span>
+														<span class="text-muted-foreground text-xs">Grok Imagine Images</span>
+													</div>
+												</DropdownMenu.Item>
+												<DropdownMenu.Item class="items-start py-2.5" onclick={() => createBuiltInProfile('google')}>
+													<div class="grid gap-0.5">
+														<span class="font-medium">Google 官方</span>
+														<span class="text-muted-foreground text-xs">Gemini Interactions</span>
+													</div>
+												</DropdownMenu.Item>
+												{#if settings.customProviders.length}
+													<DropdownMenu.Separator />
+													{#each settings.customProviders as provider}
+														<DropdownMenu.Item
+															class="items-start py-2.5"
+															onclick={() => createProfileForProvider(provider.id)}
+														>
+															<div class="grid min-w-0 gap-0.5">
+																<span class="truncate font-medium">{provider.name}</span>
+																<span class="text-muted-foreground text-xs">自定义 Manifest</span>
+															</div>
+														</DropdownMenu.Item>
+													{/each}
+												{/if}
+											</DropdownMenu.Content>
+										</DropdownMenu.Root>
 										<Button
 											type="button"
 											variant="outline"
 											size="icon-sm"
 											onclick={copyProfile}
 											aria-label="复制当前配置"
-											title="复制当前配置"
+											title="复制当前连接"
 										>
 											<Copy class="size-4" />
 										</Button>
@@ -637,9 +731,9 @@
 											>
 												<span class="block truncate text-sm font-medium">{displayProfileName(profile.name)}</span>
 												<span class="text-muted-foreground block truncate text-xs">
-													{getApiProviderLabel(settings, profile.provider)} · {profile.apiMode === 'responses'
-														? 'Responses'
-														: 'Images'} · {profile.model}
+													{getApiProviderLabel(settings, profile.provider)} · {getImageApiProtocolLabel(
+														profile.apiProtocol
+													)} · {profile.model}
 												</span>
 											</button>
 											{#if profile.id === activeProfile.id}
@@ -678,16 +772,18 @@
 								</label>
 
 								<label class="block space-y-1.5">
-									<span class="text-sm font-medium">服务商</span>
+									<span class="text-sm font-medium">模型能力预设</span>
 									<Select value={activeProfile.provider} name="provider" onchange={updateProvider}>
 										<option value="openai">OpenAI Compatible</option>
+										<option value="xai">xAI Grok Imagine</option>
+										<option value="google">Google Nano Banana</option>
 										{#each settings.customProviders as provider}
 											<option value={provider.id}>{provider.name}</option>
 										{/each}
 									</Select>
-									<span class="text-muted-foreground text-xs"
-										>切换服务商会保留当前服务商草稿，并套用新服务商默认 URL 和模型。</span
-									>
+									<span class="text-muted-foreground text-xs">
+										决定比例、参考图等可用能力，不代表 API 网站；切换时会保留各自草稿。
+									</span>
 								</label>
 
 								<label class="block space-y-1.5 sm:col-span-2">
@@ -695,7 +791,7 @@
 									<Input
 										value={activeProfile.baseUrl}
 										name="baseUrl"
-										placeholder="https://api.openai.com/v1"
+										placeholder={getDefaultProviderBaseUrl(activeProfile.provider)}
 										oninput={(event) =>
 											updateActiveProfile({ baseUrl: (event.currentTarget as HTMLInputElement).value })}
 									/>
@@ -715,16 +811,17 @@
 								</label>
 
 								<label class="block space-y-1.5">
-									<span class="text-sm font-medium">API 接口</span>
-									<Select
-										value={activeProfile.apiMode}
-										name="apiMode"
-										onchange={updateApiMode}
-										disabled={activeProfile.provider !== 'openai'}
-									>
-										<option value="images">Images API (/v1/images)</option>
-										<option value="responses">Responses API (/v1/responses)</option>
-									</Select>
+									<span class="text-sm font-medium">接口协议</span>
+									{#if activeProfile.apiProtocol !== 'custom'}
+										<Select value={activeProfile.apiProtocol} name="apiProtocol" onchange={updateApiProtocol}>
+											{#each activeProtocolOptions as protocol}
+												<option value={protocol}>{getImageApiProtocolLabel(protocol)}</option>
+											{/each}
+										</Select>
+									{:else}
+										<Input value={getImageApiProtocolLabel(activeProfile.apiProtocol)} disabled />
+									{/if}
+									<span class="text-muted-foreground text-xs">协议决定请求路径、鉴权、请求体和响应解析方式。</span>
 								</label>
 
 								<label class="block space-y-1.5">
@@ -732,10 +829,46 @@
 									<Input
 										value={activeProfile.model}
 										name="model"
-										placeholder={activeProfile.apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL}
+										placeholder={getDefaultProviderModel(activeProfile.provider, activeProfile.apiMode)}
 										oninput={(event) => updateActiveProfile({ model: (event.currentTarget as HTMLInputElement).value })}
 									/>
 								</label>
+
+								<div class="sm:col-span-2 rounded-lg border bg-muted/25 p-3">
+									<div class="flex items-start justify-between gap-3">
+										<div class="min-w-0">
+											<div class="text-muted-foreground text-xs font-medium">实际生成请求</div>
+											{#if activeEndpointPreview}
+												<code class="mt-1 block break-all text-xs leading-relaxed">
+													{activeEndpointPreview.method}
+													{activeEndpointPreview.url}
+												</code>
+											{:else}
+												<p class="mt-1 text-xs">当前配置没有可预览的请求地址。</p>
+											{/if}
+										</div>
+										{#if isBuiltInProfileProvider(activeProfile.provider)}
+											<Button
+												type="button"
+												variant="outline"
+												size="xs"
+												disabled={isUsingOfficialConnection}
+												onclick={applyOfficialConnectionPreset}
+											>
+												{isUsingOfficialConnection ? '官方连接' : '恢复官方连接'}
+											</Button>
+										{/if}
+									</div>
+									{#if activeProfileBlockReason}
+										<p class="mt-2 border-t pt-2 text-xs leading-relaxed text-destructive">
+											{activeProfileBlockReason}
+										</p>
+									{:else if activeProtocolWarning}
+										<p class="mt-2 border-t pt-2 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+											{activeProtocolWarning}
+										</p>
+									{/if}
+								</div>
 
 								<label class="block space-y-1.5">
 									<span class="text-sm font-medium">请求超时 (秒)</span>
@@ -749,42 +882,44 @@
 									/>
 								</label>
 
-								<SettingSwitch
-									title="流式图片"
-									description="OpenAI Images / Responses 可流式接收 partial 图片；自定义服务商当前使用普通请求。"
-									checked={activeProfile.streamImages}
-									disabled={activeProfile.provider !== 'openai'}
-									onToggle={() => updateActiveProfile({ streamImages: !activeProfile.streamImages })}
-								/>
-
-								<label class={`block space-y-1.5 ${activeProfile.streamImages ? '' : 'opacity-60'}`}>
-									<span class="text-sm font-medium">中间图数量 partial_images</span>
-									<Input
-										value={activeProfile.streamPartialImages}
-										name="streamPartialImages"
-										type="number"
-										min="0"
-										max="3"
-										disabled={!activeProfile.streamImages}
-										oninput={updateStreamPartialImages}
+								{#if activeCapabilities.supportsStreaming}
+									<SettingSwitch
+										title="流式图片"
+										description="流式接收并保存 partial 图片。"
+										checked={activeProfile.streamImages}
+										onToggle={() => updateActiveProfile({ streamImages: !activeProfile.streamImages })}
 									/>
-									<span class="text-muted-foreground text-xs"
-										>0-3。开启流式图片后，Gallery 和 Agent 会保存 partial 图片。</span
-									>
-								</label>
 
-								<SettingSwitch
-									title="返回 Base64 图片数据"
-									description="请求体追加 response_format: b64_json。部分网关不支持。"
-									checked={activeProfile.responseFormatB64Json}
-									onToggle={() => updateActiveProfile({ responseFormatB64Json: !activeProfile.responseFormatB64Json })}
-								/>
+									<label class={`block space-y-1.5 ${activeProfile.streamImages ? '' : 'opacity-60'}`}>
+										<span class="text-sm font-medium">中间图数量 partial_images</span>
+										<Input
+											value={activeProfile.streamPartialImages}
+											name="streamPartialImages"
+											type="number"
+											min="0"
+											max="3"
+											disabled={!activeProfile.streamImages}
+											oninput={updateStreamPartialImages}
+										/>
+										<span class="text-muted-foreground text-xs">0-3。Gallery 和 Agent 会保存 partial 图片。</span>
+									</label>
+								{/if}
+
+								{#if supportsResponseFormatB64Json(activeProfile.apiProtocol)}
+									<SettingSwitch
+										title="返回 Base64 图片数据"
+										description="请求体追加 response_format: b64_json。部分网关不支持。"
+										checked={activeProfile.responseFormatB64Json}
+										onToggle={() =>
+											updateActiveProfile({ responseFormatB64Json: !activeProfile.responseFormatB64Json })}
+									/>
+								{/if}
 
 								<SettingSwitch
 									title="Codex CLI 兼容模式"
 									description="兼容部分 OpenAI 代理网关的预留开关；默认不需要开启。"
 									checked={activeProfile.codexCli}
-									disabled={activeProfile.provider !== 'openai'}
+									disabled={!activeProfile.apiProtocol.startsWith('openai-')}
 									onToggle={() => updateActiveProfile({ codexCli: !activeProfile.codexCli })}
 								/>
 							</div>
@@ -1185,7 +1320,7 @@
 									</div>
 									<div class="rounded-lg border bg-background/70 p-3">
 										<div class="text-muted-foreground">当前 API 模式</div>
-										<div class="mt-1 font-medium">{activeProfile.apiMode}</div>
+										<div class="mt-1 font-medium">{getImageApiProtocolLabel(activeProfile.apiProtocol)}</div>
 									</div>
 								</div>
 								<div class="mt-4 flex flex-wrap gap-2">
@@ -1218,11 +1353,15 @@
 											</div>
 										{:else}
 											<div class="font-medium">当前已是最新版本</div>
-											<p class="text-muted-foreground mt-1 text-xs">已检查 GitHub Releases：{updateCheckResult.latest.tagName}</p>
+											<p class="text-muted-foreground mt-1 text-xs">
+												已检查 GitHub Releases：{updateCheckResult.latest.tagName}
+											</p>
 										{/if}
 									</div>
 								{:else if updateCheckError}
-									<div class="mt-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-xs text-destructive">
+									<div
+										class="mt-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-xs text-destructive"
+									>
 										{updateCheckError}
 									</div>
 								{/if}

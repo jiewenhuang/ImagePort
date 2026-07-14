@@ -128,7 +128,8 @@ function estimateJsonArrayBytes(values: unknown[]): number {
 	let bytes = 2;
 	values.forEach((value, index) => {
 		if (index > 0) bytes += 1;
-		bytes += value === undefined || typeof value === 'function' || typeof value === 'symbol' ? 4 : estimateJsonBytes(value);
+		bytes +=
+			value === undefined || typeof value === 'function' || typeof value === 'symbol' ? 4 : estimateJsonBytes(value);
 	});
 	return bytes;
 }
@@ -214,6 +215,7 @@ function normalizeTask(value: unknown): TaskRecord | null {
 		apiProfileName: getNullableString(value.apiProfileName),
 		apiProvider: getNullableString(value.apiProvider),
 		apiMode: normalizeApiMode(value.apiMode),
+		apiProtocol: getNullableString(value.apiProtocol),
 		model: getNullableString(value.model),
 		rawImageUrls: normalizeStringArray(value.rawImageUrls),
 		rawResponsePayload: getNullableString(value.rawResponsePayload),

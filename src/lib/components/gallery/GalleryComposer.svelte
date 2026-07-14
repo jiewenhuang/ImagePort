@@ -31,13 +31,19 @@
 		qualityOptions,
 		formatOptions,
 		moderationOptions,
+		supportsOutputCompression,
+		imageEditSupported,
+		imageEditUnsupportedReason,
+		maskSupported,
+		maskUnsupportedReason,
 		onSubmit,
 		onPaste,
 		onOpenFilePicker,
 		onOpenSizePicker,
 		onRemoveInputImage,
 		onClearInputImages,
-		onEditMask
+		onEditMask,
+		onClearMask
 	}: {
 		appMode: 'gallery' | 'agent';
 		inputBarHeight?: number;
@@ -61,6 +67,11 @@
 		qualityOptions: TaskParams['quality'][];
 		formatOptions: TaskParams['output_format'][];
 		moderationOptions: TaskParams['moderation'][];
+		supportsOutputCompression: boolean;
+		imageEditSupported: boolean;
+		imageEditUnsupportedReason: string | null;
+		maskSupported: boolean;
+		maskUnsupportedReason: string | null;
 		onSubmit: () => void;
 		onPaste: (event: ClipboardEvent) => void | Promise<void>;
 		onOpenFilePicker: () => void;
@@ -68,6 +79,7 @@
 		onRemoveInputImage: (id: string) => void;
 		onClearInputImages: () => void;
 		onEditMask: (id: string) => void;
+		onClearMask: () => void;
 	} = $props();
 
 	function updateImageCount(event: Event) {
@@ -128,55 +140,86 @@
 					onAdd={onOpenFilePicker}
 					onRemove={onRemoveInputImage}
 					onClear={onClearInputImages}
-					onEditMask={onEditMask}
+					{onEditMask}
+					{onClearMask}
+					maxImages={maxInputImages}
+					{imageEditSupported}
+					{imageEditUnsupportedReason}
+					{maskSupported}
+					{maskUnsupportedReason}
 				/>
 			{/if}
 
-			<div class="mb-3 grid grid-cols-[auto_repeat(6,minmax(0,1fr))] items-end gap-2 max-lg:grid-cols-3">
-				<div class="text-muted-foreground flex h-9 items-center gap-1.5 text-xs font-medium max-lg:col-span-3">
+			<div class="mb-3 flex items-end gap-2 max-lg:flex-col max-lg:items-stretch">
+				<div class="text-muted-foreground flex h-9 shrink-0 items-center gap-1.5 text-xs font-medium">
 					<SlidersHorizontal class="size-3.5" />
 					参数
 				</div>
-				<Button type="button" variant="outline" class="justify-start overflow-hidden px-3 text-xs" onclick={onOpenSizePicker}>
-					<span class="truncate">{params.size}</span>
-				</Button>
-				<Select bind:value={params.quality} name="quality" class="h-9 rounded-lg text-xs" aria-label="质量">
-					{#each qualityOptions as option}
-						<option value={option}>质量 {option}</option>
-					{/each}
-				</Select>
-				<Select bind:value={params.output_format} name="outputFormat" class="h-9 rounded-lg text-xs" aria-label="格式">
-					{#each formatOptions as option}
-						<option value={option}>格式 {option}</option>
-					{/each}
-				</Select>
-				<Select bind:value={params.moderation} name="moderation" class="h-9 rounded-lg text-xs" aria-label="审核强度">
-					{#each moderationOptions as option}
-						<option value={option}>审核 {option}</option>
-					{/each}
-				</Select>
-				<Input
-					value={params.output_compression ?? ''}
-					name="outputCompression"
-					type="number"
-					min="0"
-					max="100"
-					class="h-9 rounded-lg text-xs"
-					placeholder="压缩"
-					disabled={params.output_format === 'png'}
-					oninput={updateCompression}
-				/>
-				<Input
-					value={activeParams.n}
-					name="imageCount"
-					type={activeParams.n === 'auto' ? 'text' : 'number'}
-					min="1"
-					max={maxOutputImages}
-					class="h-9 rounded-lg text-xs"
-					disabled={activeParams.n === 'auto'}
-					aria-label="生成数量"
-					oninput={updateImageCount}
-				/>
+				<div class="grid min-w-0 flex-1 grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-2">
+					<Button
+						type="button"
+						variant="outline"
+						class="justify-start overflow-hidden px-3 text-xs"
+						onclick={onOpenSizePicker}
+					>
+						<span class="truncate">{params.size}</span>
+					</Button>
+					{#if qualityOptions.length}
+						<Select bind:value={params.quality} name="quality" class="h-9 rounded-lg text-xs" aria-label="质量">
+							{#each qualityOptions as option}
+								<option value={option}>质量 {option}</option>
+							{/each}
+						</Select>
+					{/if}
+					{#if formatOptions.length}
+						<Select
+							bind:value={params.output_format}
+							name="outputFormat"
+							class="h-9 rounded-lg text-xs"
+							aria-label="格式"
+						>
+							{#each formatOptions as option}
+								<option value={option}>格式 {option}</option>
+							{/each}
+						</Select>
+					{/if}
+					{#if moderationOptions.length}
+						<Select
+							bind:value={params.moderation}
+							name="moderation"
+							class="h-9 rounded-lg text-xs"
+							aria-label="审核强度"
+						>
+							{#each moderationOptions as option}
+								<option value={option}>审核 {option}</option>
+							{/each}
+						</Select>
+					{/if}
+					{#if supportsOutputCompression}
+						<Input
+							value={params.output_compression ?? ''}
+							name="outputCompression"
+							type="number"
+							min="0"
+							max="100"
+							class="h-9 rounded-lg text-xs"
+							placeholder="压缩"
+							disabled={params.output_format === 'png'}
+							oninput={updateCompression}
+						/>
+					{/if}
+					<Input
+						value={activeParams.n}
+						name="imageCount"
+						type={activeParams.n === 'auto' ? 'text' : 'number'}
+						min="1"
+						max={maxOutputImages}
+						class="h-9 rounded-lg text-xs"
+						disabled={activeParams.n === 'auto'}
+						aria-label="生成数量"
+						oninput={updateImageCount}
+					/>
+				</div>
 			</div>
 
 			<div class="flex gap-3">
@@ -241,6 +284,11 @@
 				</p>
 				<p class="text-muted-foreground hidden text-xs sm:block">可粘贴或拖拽图片到窗口</p>
 			</div>
+			{#if appMode === 'gallery' && effectiveGalleryProfile.provider === 'google' && typeof activeParams.n === 'number' && activeParams.n > 1}
+				<p class="mt-1 text-xs text-amber-700 dark:text-amber-400">
+					Gemini 将发起 {activeParams.n} 次独立生成请求，并按实际请求计费。
+				</p>
+			{/if}
 
 			{#if error}
 				<div class="border-destructive/30 bg-destructive/10 text-destructive mt-3 rounded-md border px-3 py-2 text-sm">

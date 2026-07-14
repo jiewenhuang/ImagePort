@@ -19,6 +19,7 @@ const MIME_MAP: Record<string, string> = {
 interface ImageResponseItem {
 	b64_json?: string;
 	url?: string;
+	mime_type?: string;
 	revised_prompt?: string;
 	size?: string;
 	quality?: string;
@@ -157,7 +158,7 @@ export function parseImagesGenerationResponse(payload: unknown, outputFormat: st
 		throw new Error('接口没有返回图片数据');
 	}
 
-	const mime = MIME_MAP[outputFormat] ?? 'image/png';
+	const fallbackMime = MIME_MAP[outputFormat] ?? 'image/png';
 	const images: string[] = [];
 	const rawImageUrls: string[] = [];
 	const revisedPrompts: Array<string | undefined> = [];
@@ -166,6 +167,8 @@ export function parseImagesGenerationResponse(payload: unknown, outputFormat: st
 	for (const item of data) {
 		const actualParams = pickActualParams(item);
 		if (typeof item.b64_json === 'string' && item.b64_json.trim()) {
+			const mime =
+				typeof item.mime_type === 'string' && item.mime_type.startsWith('image/') ? item.mime_type : fallbackMime;
 			images.push(normalizeBase64Image(item.b64_json, mime));
 			revisedPrompts.push(item.revised_prompt);
 			actualParamsList.push(actualParams);

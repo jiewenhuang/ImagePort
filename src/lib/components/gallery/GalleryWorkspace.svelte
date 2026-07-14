@@ -95,6 +95,7 @@
 		type AppSettings,
 		type ApiProfile
 	} from '$lib/domain/settings';
+	import { getProviderCapabilities, getProviderInputValidationMessage } from '$lib/domain/provider-capabilities';
 	import {
 		estimateTasksStorageBytesAsync,
 		mergeTaskSnapshots,
@@ -147,15 +148,10 @@
 	import TaskDetailModal from './TaskDetailModal.svelte';
 	import TaskSelectionBar from './TaskSelectionBar.svelte';
 
-	const qualityOptions: TaskParams['quality'][] = ['auto', 'low', 'medium', 'high'];
-	const formatOptions: TaskParams['output_format'][] = ['png', 'jpeg', 'webp'];
-	const moderationOptions: TaskParams['moderation'][] = ['auto', 'low'];
 	const SETTINGS_STORAGE_KEY = 'imageport.gallery.settings';
 	const INPUT_DRAFT_STORAGE_KEY = 'imageport.gallery.inputDraft';
 	const TASKS_STORAGE_KEY = 'imageport.gallery.tasks';
 	const AGENT_STORAGE_KEY = 'imageport.agent.conversations';
-	const MAX_INPUT_IMAGES = 16;
-	const MAX_OUTPUT_IMAGES = 10;
 	const TASK_GRID_SKELETON_ITEMS = Array.from({ length: 8 }, (_, index) => index);
 
 	let settings = $state<AppSettings>(DEFAULT_SETTINGS);
@@ -263,7 +259,12 @@
 			? (settings.profiles.find((profile) => profile.id === nextGalleryProfileOverrideId) ?? activeProfile)
 			: activeProfile
 	);
-	let profileBlockReason = $derived(getProfileRequestBlockReason(effectiveGalleryProfile, settings));
+	let composerProfile = $derived(appMode === 'agent' ? activeProfile : effectiveGalleryProfile);
+	let composerCapabilities = $derived(getProviderCapabilities(composerProfile, settings));
+	let profileBlockReason = $derived(
+		getProfileRequestBlockReason(effectiveGalleryProfile, settings) ??
+			getProviderInputValidationMessage(composerCapabilities, inputImages.length, Boolean(mask))
+	);
 	let agentBlockReason = $derived(getAgentRequestBlockReason(activeProfile, settings));
 	let activeParams = $derived(
 		normalizeParamsForRequest(params, appMode === 'agent' ? activeProfile : effectiveGalleryProfile, appMode)
@@ -468,10 +469,20 @@
 			return;
 		}
 		const blockReason = getProfileRequestBlockReason(submitProfile, settings);
+		const inputBlockReason = getProviderInputValidationMessage(
+			getProviderCapabilities(submitProfile, settings),
+			inputImages.length,
+			Boolean(mask)
+		);
 		if (blockReason) {
 			error = blockReason;
 			toast.warning('当前配置不可用', { description: blockReason });
 			openSettings();
+			return;
+		}
+		if (inputBlockReason) {
+			error = inputBlockReason;
+			toast.warning('当前输入不兼容', { description: inputBlockReason });
 			return;
 		}
 
@@ -624,6 +635,7 @@
 			apiProfileName: input.profile.name,
 			apiProvider: input.profile.provider,
 			apiMode: input.profile.apiMode,
+			apiProtocol: input.profile.apiProtocol,
 			model: input.profile.model,
 			sourceMode: input.sourceMode,
 			agentConversationId: input.agentConversationId ?? null,
@@ -1317,10 +1329,13 @@
 			storageBytesRefreshFrame = null;
 			if (!showSettings) return;
 			if (idleWindow.requestIdleCallback) {
-				storageBytesRefreshIdle = idleWindow.requestIdleCallback(() => {
-					storageBytesRefreshIdle = null;
-					runRefresh();
-				}, { timeout: 1000 });
+				storageBytesRefreshIdle = idleWindow.requestIdleCallback(
+					() => {
+						storageBytesRefreshIdle = null;
+						runRefresh();
+					},
+					{ timeout: 1000 }
+				);
 				return;
 			}
 			storageBytesRefreshTimer = window.setTimeout(() => {
@@ -1389,12 +1404,32 @@
 	}
 
 	function normalizeParamsForRequest(value: TaskParams, profile: ApiProfile, mode: 'gallery' | 'agent'): TaskParams {
-		const modelControlsOutputCount =
-			mode === 'agent' || (profile.provider === 'openai' && profile.apiMode === 'responses');
-		if (modelControlsOutputCount) return { ...value, n: 'auto' };
-		return {
+		const capabilities = getProviderCapabilities(profile, settings);
+		const modelControlsOutputCount = mode === 'agent' || capabilities.usesModelControlledOutputCount;
+		const normalized: TaskParams = {
 			...value,
-			n: getConcreteOutputImageCount(value.n)
+			quality: capabilities.qualityOptions.length
+				? capabilities.qualityOptions.includes(value.quality)
+					? value.quality
+					: capabilities.qualityOptions[0]
+				: 'auto',
+			output_format: capabilities.formatOptions.length
+				? capabilities.formatOptions.includes(value.output_format)
+					? value.output_format
+					: capabilities.formatOptions[0]
+				: 'png',
+			output_compression: capabilities.supportsOutputCompression ? value.output_compression : null,
+			moderation: capabilities.moderationOptions.length
+				? capabilities.moderationOptions.includes(value.moderation)
+					? value.moderation
+					: capabilities.moderationOptions[0]
+				: 'auto',
+			n: modelControlsOutputCount ? 'auto' : getConcreteOutputImageCount(value.n)
+		};
+		if (modelControlsOutputCount) return normalized;
+		return {
+			...normalized,
+			n: Math.min(capabilities.maxOutputImages, getConcreteOutputImageCount(normalized.n))
 		};
 	}
 
@@ -1466,10 +1501,17 @@
 
 	async function addFiles(files: FileList | File[] | null) {
 		if (!files) return;
+		if (!composerCapabilities.supportsImageEdit) {
+			error = '当前服务商未配置图像编辑能力，请切换服务商后再添加参考图。';
+			toast.warning('当前服务商不支持参考图', { description: error });
+			return;
+		}
 		const accepted = Array.from(files).filter((file) => file.type.startsWith('image/'));
-		const remaining = MAX_INPUT_IMAGES - inputImages.length;
+		const maxInputImages = composerCapabilities.maxInputImages;
+		const remaining = maxInputImages - inputImages.length;
 		if (remaining <= 0) {
-			error = `参考图数量已达上限（${MAX_INPUT_IMAGES} 张）`;
+			error = `参考图数量已达上限（${maxInputImages} 张）`;
+			toast.warning('参考图数量已达上限', { description: `当前模型最多 ${maxInputImages} 张` });
 			return;
 		}
 
@@ -1653,9 +1695,15 @@
 	}
 
 	async function addDataUrlAsReference(dataUrl: string, name: string) {
-		if (inputImages.length >= MAX_INPUT_IMAGES) {
-			error = `参考图数量已达上限（${MAX_INPUT_IMAGES} 张）`;
-			toast.warning('参考图数量已达上限', { description: `最多 ${MAX_INPUT_IMAGES} 张` });
+		if (!composerCapabilities.supportsImageEdit) {
+			error = '当前服务商未配置图像编辑能力，请切换服务商后再添加参考图。';
+			toast.warning('当前服务商不支持参考图', { description: error });
+			return false;
+		}
+		const maxInputImages = composerCapabilities.maxInputImages;
+		if (inputImages.length >= maxInputImages) {
+			error = `参考图数量已达上限（${maxInputImages} 张）`;
+			toast.warning('参考图数量已达上限', { description: `当前模型最多 ${maxInputImages} 张` });
 			return false;
 		}
 		const id = await hashText(dataUrl);
@@ -1686,6 +1734,13 @@
 	}
 
 	async function editOutputWithMask(task: TaskRecord, imageIndex: number) {
+		if (!composerCapabilities.supportsMask) {
+			await useOutputAsReference(task, imageIndex);
+			toast.info('当前模型不支持像素级蒙版', {
+				description: composerCapabilities.maskUnsupportedReason ?? '已将图片添加为普通参考图。'
+			});
+			return;
+		}
 		await useOutputAsReference(task, imageIndex);
 		const image = task.images[imageIndex];
 		if (!image) return;
@@ -1698,7 +1753,6 @@
 		error = message;
 		toast.error('下载失败', { description: message });
 	}
-
 </script>
 
 <svelte:head>
@@ -1956,22 +2010,24 @@
 								onUsePrimaryReference={useTaskPrimaryImageAsReference}
 								onUseFirstOutputReference={(task) => useOutputAsReference(task, 0)}
 								onEditMask={(task) => editOutputWithMask(task, 0)}
+								canEditMask={composerCapabilities.supportsMask}
+								canUseReference={composerCapabilities.supportsImageEdit}
 								onDelete={removeTask}
 							/>
 						{/each}
 					</section>
-						{#if hasMoreTasks}
-							<div data-no-drag-select class="flex justify-center pt-5">
-								<Button type="button" variant="outline" onclick={loadMoreTasks} disabled={isLoadingStoredTasks}>
-									{isLoadingStoredTasks ? '加载中...' : '加载更多'}
-									<span class="text-muted-foreground text-xs">
-										{hasMoreStoredTasks
-											? `${tasks.length}/${totalStoredTaskCount || '...'}`
-											: `${visibleTasks.length}/${filteredTasks.length}`}
-									</span>
-								</Button>
-							</div>
-						{/if}
+					{#if hasMoreTasks}
+						<div data-no-drag-select class="flex justify-center pt-5">
+							<Button type="button" variant="outline" onclick={loadMoreTasks} disabled={isLoadingStoredTasks}>
+								{isLoadingStoredTasks ? '加载中...' : '加载更多'}
+								<span class="text-muted-foreground text-xs">
+									{hasMoreStoredTasks
+										? `${tasks.length}/${totalStoredTaskCount || '...'}`
+										: `${visibleTasks.length}/${filteredTasks.length}`}
+								</span>
+							</Button>
+						</div>
+					{/if}
 				{/if}
 				{#if selectionBox}
 					{@const rect = normalizeSelectionRect(selectionBox)}
@@ -2026,17 +2082,25 @@
 		{nextGalleryProfileOverrideId}
 		{canSubmit}
 		{canSubmitAgent}
-		maxInputImages={MAX_INPUT_IMAGES}
-		maxOutputImages={MAX_OUTPUT_IMAGES}
-		{qualityOptions}
-		{formatOptions}
-		{moderationOptions}
+		maxInputImages={composerCapabilities.maxInputImages}
+		maxOutputImages={composerCapabilities.maxOutputImages}
+		qualityOptions={composerCapabilities.qualityOptions}
+		formatOptions={composerCapabilities.formatOptions}
+		moderationOptions={composerCapabilities.moderationOptions}
+		supportsOutputCompression={composerCapabilities.supportsOutputCompression}
+		imageEditSupported={composerCapabilities.supportsImageEdit}
+		imageEditUnsupportedReason={composerCapabilities.supportsImageEdit
+			? null
+			: '当前服务商未配置图像编辑能力，请切换服务商后再添加参考图。'}
+		maskSupported={composerCapabilities.supportsMask}
+		maskUnsupportedReason={composerCapabilities.maskUnsupportedReason}
 		onSubmit={() => void (appMode === 'agent' ? submitAgentMessage() : submitGeneration())}
 		onPaste={handlePaste}
 		onOpenFilePicker={openFilePicker}
 		onOpenSizePicker={() => (showSizePicker = true)}
 		onRemoveInputImage={removeInputImage}
 		onClearInputImages={clearInputImages}
+		onClearMask={() => (mask = null)}
 		onEditMask={(id) => {
 			maskEditorImageId = id;
 			showMaskEditor = true;
@@ -2067,7 +2131,14 @@
 		onImportFullBackup={importFullBackupFromFile}
 		onRequestTasksStorageBytes={scheduleTasksStorageBytesRefresh}
 	/>
-	<SizePickerModal bind:open={showSizePicker} currentSize={params.size} onSelect={(size) => (params.size = size)} />
+	<SizePickerModal
+		bind:open={showSizePicker}
+		currentSize={params.size}
+		availableTiers={composerCapabilities.sizeTiers}
+		availableRatios={composerCapabilities.aspectRatios}
+		allowExactSize={composerCapabilities.supportsExactSize}
+		onSelect={(size) => (params.size = size)}
+	/>
 	<TaskDetailModal
 		bind:open={showTaskDetail}
 		task={selectedTask}
@@ -2076,6 +2147,8 @@
 		onToggleFavorite={toggleTaskFavorite}
 		onDownloadAll={downloadTaskZip}
 		canDownloadAll={isZipRouteEnabled('task-detail-all')}
+		canUseAsReference={composerCapabilities.supportsImageEdit}
+		canEditMask={composerCapabilities.supportsMask}
 		onUseAsReference={useOutputAsReference}
 		onEditMask={editOutputWithMask}
 		onOpenLightbox={(task, index) => openTaskLightbox(task, index)}
@@ -2087,8 +2160,8 @@
 		images={lightboxImages}
 		bind:index={lightboxIndex}
 		title={lightboxTitle}
-		canUseAsReference={Boolean(lightboxTask)}
-		canEditMask={Boolean(lightboxTask)}
+		canUseAsReference={Boolean(lightboxTask) && composerCapabilities.supportsImageEdit}
+		canEditMask={Boolean(lightboxTask) && composerCapabilities.supportsMask}
 		onDownload={downloadLightboxImage}
 		onDownloadAll={lightboxTask && isZipRouteEnabled('lightbox') ? () => downloadTaskZip(lightboxTask) : undefined}
 		onCopy={copyImage}

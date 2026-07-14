@@ -31,11 +31,15 @@
 		onOpenLightbox,
 		onOpenInputLightbox,
 		onCopyImage,
-		canDownloadAll = true
+		canDownloadAll = true,
+		canUseAsReference = true,
+		canEditMask = true
 	}: {
 		task: TaskRecord | null;
 		open?: boolean;
 		canDownloadAll?: boolean;
+		canUseAsReference?: boolean;
+		canEditMask?: boolean;
 		onReuse: (task: TaskRecord) => void;
 		onDelete: (taskId: string) => void;
 		onToggleFavorite: (taskId: string) => void;
@@ -200,8 +204,8 @@
 						<div class="relative flex h-full w-full items-center justify-center">
 							<ImageActionContextMenu
 								canDownloadAll={canDownloadAll && downloadableImageCount > 1}
-								canUseAsReference
-								canEditMask={!previewingPartial}
+								{canUseAsReference}
+								canEditMask={canEditMask && !previewingPartial}
 								onOpen={() => onOpenLightbox(previewTask, selectedIndex)}
 								onDownload={() => downloadImage(previewImages[selectedIndex], selectedIndex)}
 								onDownloadAll={() => onDownloadAll(task)}
@@ -289,7 +293,7 @@
 							<span class="text-muted-foreground">配置</span>
 							<span class="truncate">{task.apiProfileName ?? '未知配置'}</span>
 							<span class="text-muted-foreground">模式</span>
-							<span>{task.apiProvider ?? 'openai'} · {task.apiMode ?? 'images'}</span>
+							<span>{task.apiProvider ?? 'openai'} · {task.apiProtocol ?? task.apiMode ?? 'images'}</span>
 							<span class="text-muted-foreground">模型</span>
 							<span class="truncate">{task.model ?? '未知模型'}</span>
 						</div>
@@ -377,7 +381,7 @@
 								{#each task.inputImages as image, index}
 									<ImageActionContextMenu
 										canDownloadAll={false}
-										canUseAsReference
+										{canUseAsReference}
 										canEditMask={false}
 										onOpen={() => onOpenInputLightbox(task, index)}
 										onDownload={() => downloadImage(image.dataUrl, index)}
@@ -407,7 +411,7 @@
 								{#each task.streamPartialImageIds as image, index}
 									<ImageActionContextMenu
 										canDownloadAll={canDownloadAll && downloadableImageCount > 1}
-										canUseAsReference
+										{canUseAsReference}
 										canEditMask={false}
 										onOpen={() => onOpenLightbox({ ...task, images: task.streamPartialImageIds }, index)}
 										onDownload={() => downloadImage(image, index)}
@@ -441,8 +445,8 @@
 							{#each task.images as image, index}
 								<ImageActionContextMenu
 									canDownloadAll={canDownloadAll && downloadableImageCount > 1}
-									canUseAsReference
-									canEditMask
+									{canUseAsReference}
+									{canEditMask}
 									onOpen={() => onOpenLightbox(task, index)}
 									onDownload={() => downloadImage(image, index)}
 									onDownloadAll={() => onDownloadAll(task)}
@@ -484,7 +488,7 @@
 						<Button
 							variant="outline"
 							class="justify-start"
-							disabled={!previewImages[selectedIndex]}
+							disabled={!canUseAsReference || !previewImages[selectedIndex]}
 							onclick={() => onUseAsReference(previewTask, selectedIndex)}
 						>
 							<ImagePlus class="size-4" />
@@ -519,7 +523,7 @@
 						<Button
 							variant="outline"
 							class="justify-start"
-							disabled={previewingPartial || !task.images[selectedIndex]}
+							disabled={!canEditMask || previewingPartial || !task.images[selectedIndex]}
 							onclick={() => {
 								onEditMask(task, selectedIndex);
 								close();

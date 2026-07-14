@@ -23,6 +23,8 @@
 		onUsePrimaryReference,
 		onUseFirstOutputReference,
 		onEditMask,
+		canUseReference = true,
+		canEditMask = true,
 		onDelete
 	}: {
 		task: TaskRecord;
@@ -40,6 +42,8 @@
 		onUsePrimaryReference: (task: TaskRecord) => void | Promise<void>;
 		onUseFirstOutputReference: (task: TaskRecord) => void | Promise<void>;
 		onEditMask: (task: TaskRecord) => void | Promise<void>;
+		canUseReference?: boolean;
+		canEditMask?: boolean;
 		onDelete: (taskId: string) => void;
 	} = $props();
 
@@ -54,14 +58,14 @@
 		{#if viewModel.primaryImage}
 			<ImageActionContextMenu
 				canDownloadAll={viewModel.canDownloadAll}
-				canUseAsReference
-				canEditMask={viewModel.canEditMask}
+				canUseAsReference={canUseReference}
+				canEditMask={canEditMask && viewModel.canEditMask}
 				onOpen={() => onOpenPreview(task)}
 				onDownload={() => onDownloadPrimary(task)}
 				onDownloadAll={() => onDownloadAll(task)}
 				onCopy={() => onCopyPrimary(task)}
-				onUseAsReference={() => onUsePrimaryReference(task)}
-				onEditMask={() => (viewModel.canEditMask ? onEditMask(task) : undefined)}
+				onUseAsReference={() => (canUseReference ? onUsePrimaryReference(task) : undefined)}
+				onEditMask={() => (canEditMask && viewModel.canEditMask ? onEditMask(task) : undefined)}
 			>
 				<button
 					type="button"
@@ -171,12 +175,7 @@
 			{/if}
 		</div>
 		<div class="grid grid-cols-4 gap-2">
-			<Button
-				variant="outline"
-				size="xs"
-				onclick={() => onOpen(task)}
-				disabled={!viewModel.canOpenPreview}
-			>
+			<Button variant="outline" size="xs" onclick={() => onOpen(task)} disabled={!viewModel.canOpenPreview}>
 				<Eye class="size-3" />
 				查看
 			</Button>
@@ -184,7 +183,12 @@
 				<RotateCcw class="size-3" />
 				复用
 			</Button>
-			<Button variant="ghost" size="xs" onclick={() => onDownloadPrimary(task)} disabled={!viewModel.canDownloadPrimary}>
+			<Button
+				variant="ghost"
+				size="xs"
+				onclick={() => onDownloadPrimary(task)}
+				disabled={!viewModel.canDownloadPrimary}
+			>
 				<Download class="size-3" />
 				下载
 			</Button>
@@ -196,10 +200,7 @@
 					</Button>
 				</DropdownMenu.Trigger>
 				<DropdownMenu.Content align="end" class="w-44">
-					<DropdownMenu.Item
-						onclick={() => onOpen(task)}
-						disabled={!viewModel.canOpenPreview}
-					>
+					<DropdownMenu.Item onclick={() => onOpen(task)} disabled={!viewModel.canOpenPreview}>
 						<Eye class="size-4" />
 						查看详情
 					</DropdownMenu.Item>
@@ -213,7 +214,10 @@
 							下载全部 ZIP
 						</DropdownMenu.Item>
 					{/if}
-					<DropdownMenu.Item onclick={() => onUseFirstOutputReference(task)} disabled={!viewModel.canEditMask}>
+					<DropdownMenu.Item
+						onclick={() => onUseFirstOutputReference(task)}
+						disabled={!canUseReference || !viewModel.canEditMask}
+					>
 						<ImagePlus class="size-4" />
 						首图作参考
 					</DropdownMenu.Item>

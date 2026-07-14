@@ -44,10 +44,44 @@ describe('buildImageProviderRequestGroup', () => {
 		expect((group.requests[0].request as NativeJsonRequest).body?.n).toBe(undefined);
 	});
 
+	test('routes a Gemini model through an OpenAI-compatible gateway when selected', () => {
+		const settings = normalizeSettings({
+			profiles: [
+				{
+					...DEFAULT_SETTINGS.profiles[0],
+					provider: 'google',
+					apiProtocol: 'openai-images',
+					baseUrl: 'https://gateway.example.com/v1',
+					apiKey: 'gateway-key',
+					model: 'gemini-image'
+				}
+			]
+		});
+		const group = buildImageProviderRequestGroup({
+			settings,
+			profile: settings.profiles[0],
+			prompt: 'a banana',
+			params: { ...params, n: 1 },
+			inputImages: [],
+			mask: null
+		});
+
+		const request = group.requests[0].request as NativeJsonRequest;
+		expect(group.provider).toBe('google');
+		expect(request.url).toBe('https://gateway.example.com/v1/images/generations');
+		expect(request.headers.Authorization).toBe('Bearer gateway-key');
+		expect('x-goog-api-key' in request.headers).toBe(false);
+	});
+
 	test('builds OpenAI Responses image requests with reference images', () => {
 		const request = buildResponsesImageRequest({
 			settings: DEFAULT_SETTINGS,
-			profile: { ...DEFAULT_SETTINGS.profiles[0], apiMode: 'responses', model: 'gpt-5.5' },
+			profile: {
+				...DEFAULT_SETTINGS.profiles[0],
+				apiMode: 'responses',
+				apiProtocol: 'openai-responses',
+				model: 'gpt-5.5'
+			},
 			prompt: 'edit this image',
 			params: autoCountParams,
 			inputImages: [{ id: 'image', name: 'input.png', dataUrl: 'data:image/png;base64,aW1hZ2U=' }],

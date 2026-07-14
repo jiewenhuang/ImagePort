@@ -7,6 +7,7 @@ import { runAgentResponsesRequest } from './agent-runner';
 const profile = {
 	...DEFAULT_SETTINGS.profiles[0],
 	apiMode: 'responses' as const,
+	apiProtocol: 'openai-responses' as const,
 	apiKey: 'sk-test',
 	model: 'gpt-5.5'
 };

@@ -70,7 +70,7 @@ async function requestProviderNativeResponse(
 	taskId: string,
 	deps: GalleryImageRunnerDependencies
 ): Promise<CallApiResult> {
-	if (profile.provider === 'openai' && profile.streamImages) {
+	if (profile.apiProtocol.startsWith('openai-') && profile.streamImages) {
 		return requestStreamImageResponse(providerRequest, outputFormat, taskId, deps);
 	}
 	const response = await sendProviderNativeRequest(providerRequest, deps);

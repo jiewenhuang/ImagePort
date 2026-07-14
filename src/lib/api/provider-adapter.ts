@@ -1,15 +1,5 @@
 import {
-	buildImagesEditRequests,
-	buildImagesGenerationRequests,
-	parseImagesGenerationResponse
-} from './openai-compatible';
-import {
-	normalizeOutputImageCount,
 	type CallApiResult,
-	type ImageEditRequestInput,
-	type ImageGenerationRequestInput,
-	type InputImage,
-	type MaskDraft,
 	type NativeJsonRequest,
 	type NativeMultipartRequest,
 	type TaskParams
@@ -23,6 +13,17 @@ import {
 	type CustomProviderSubmitMapping
 } from '$lib/domain/settings';
 import { buildApiUrl } from '$lib/domain/url';
+import { getBuiltInImageProtocolAdapter } from './providers/registry';
+import {
+	buildResponsesImageRequest,
+	parseImageStreamEvents,
+	parseResponsesImageResponse,
+	type ParsedImageStreamEvents
+} from './providers/openai-adapter';
+import type { BuildProviderRequestGroupInput, ProviderNativeRequest, ProviderRequestGroup } from './providers/types';
+
+export { buildResponsesImageRequest, parseImageStreamEvents, parseResponsesImageResponse };
+export type { BuildProviderRequestGroupInput, ParsedImageStreamEvents, ProviderNativeRequest, ProviderRequestGroup };
 
 const MIME_MAP: Record<string, string> = {
 	png: 'image/png',
@@ -30,272 +31,12 @@ const MIME_MAP: Record<string, string> = {
 	webp: 'image/webp'
 };
 
-export type ProviderNativeRequest =
-	| {
-			kind: 'json';
-			request: NativeJsonRequest;
-			parse: (payload: unknown) => CallApiResult;
-			customAsync?: {
-				submit: CustomProviderSubmitMapping;
-				poll: CustomProviderPollMapping;
-			};
-	  }
-	| {
-			kind: 'multipart';
-			request: NativeMultipartRequest;
-			parse: (payload: unknown) => CallApiResult;
-			customAsync?: {
-				submit: CustomProviderSubmitMapping;
-				poll: CustomProviderPollMapping;
-			};
-	  };
-
-export interface ProviderRequestGroup {
-	provider: string;
-	requests: ProviderNativeRequest[];
-}
-
-export interface BuildProviderRequestGroupInput {
-	settings: AppSettings;
-	profile: ApiProfile;
-	prompt: string;
-	params: TaskParams;
-	inputImages: InputImage[];
-	mask: MaskDraft | null;
-}
-
 export function buildImageProviderRequestGroup(input: BuildProviderRequestGroupInput): ProviderRequestGroup {
 	const customProvider = getCustomProvider(input.settings, input.profile.provider);
 	if (customProvider) return buildCustomProviderRequestGroup(input, customProvider);
-
-	return buildOpenAIRequestGroup(input);
-}
-
-function buildOpenAIRequestGroup(input: BuildProviderRequestGroupInput): ProviderRequestGroup {
-	if (input.profile.apiMode === 'responses') {
-		return {
-			provider: 'openai',
-			requests: [
-				{
-					kind: 'json',
-					request: buildResponsesImageRequest(input),
-					parse: (payload) => parseResponsesImageResponse(payload, input.params.output_format)
-				}
-			]
-		};
-	}
-	const requestInput: ImageGenerationRequestInput = {
-		baseUrl: input.profile.baseUrl,
-		apiKey: input.profile.apiKey,
-		model: input.profile.model,
-		timeoutSecs: input.profile.timeoutSecs,
-		responseFormatB64Json: input.profile.responseFormatB64Json,
-		streamImages: input.profile.streamImages,
-		streamPartialImages: input.profile.streamPartialImages,
-		prompt: input.prompt,
-		params: input.params
-	};
-	const requests = input.inputImages.length
-		? buildImagesEditRequests({
-				...requestInput,
-				inputImages: input.mask ? orderImagesForMask(input.inputImages, input.mask.targetImageId) : input.inputImages,
-				mask: input.mask
-			} satisfies ImageEditRequestInput).map(
-				(request): ProviderNativeRequest => ({
-					kind: 'multipart',
-					request,
-					parse: (payload) => parseImagesGenerationResponse(payload, input.params.output_format)
-				})
-			)
-		: buildImagesGenerationRequests(requestInput).map(
-				(request): ProviderNativeRequest => ({
-					kind: 'json',
-					request,
-					parse: (payload) => parseImagesGenerationResponse(payload, input.params.output_format)
-				})
-			);
-
-	return {
-		provider: 'openai',
-		requests
-	};
-}
-
-export function buildResponsesImageRequest(input: BuildProviderRequestGroupInput): NativeJsonRequest {
-	const isEdit = input.inputImages.length > 0;
-	const tool: Record<string, unknown> = {
-		type: 'image_generation',
-		action: isEdit ? 'edit' : 'generate',
-		size: input.params.size,
-		quality: input.params.quality,
-		output_format: input.params.output_format,
-		moderation: input.params.moderation
-	};
-	if (input.params.output_format !== 'png' && input.params.output_compression != null) {
-		tool.output_compression = input.params.output_compression;
-	}
-	if (input.mask) {
-		tool.input_image_mask = { image_url: input.mask.dataUrl };
-	}
-	if (input.profile.streamImages) {
-		tool.partial_images = input.profile.streamPartialImages;
-	}
-	const body: Record<string, unknown> = {
-		model: input.profile.model,
-		input: createResponsesInput(input.prompt, input.inputImages),
-		tools: [tool]
-	};
-	if (input.profile.streamImages) body.stream = true;
-
-	return {
-		url: buildApiUrl(input.profile.baseUrl, 'responses'),
-		method: 'POST',
-		headers: {
-			Authorization: `Bearer ${input.profile.apiKey}`,
-			'Content-Type': 'application/json'
-		},
-		body,
-		timeoutSecs: input.profile.timeoutSecs
-	};
-}
-
-function createResponsesInput(prompt: string, inputImages: InputImage[]): unknown {
-	if (!inputImages.length) return prompt;
-	return [
-		{
-			role: 'user',
-			content: [
-				{ type: 'input_text', text: prompt },
-				...inputImages.map((image) => ({
-					type: 'input_image',
-					image_url: image.dataUrl
-				}))
-			]
-		}
-	];
-}
-
-export interface ParsedImageStreamEvents {
-	partialImages: string[];
-	result: CallApiResult;
-}
-
-export function parseResponsesImageResponse(
-	payload: unknown,
-	outputFormat: TaskParams['output_format']
-): CallApiResult {
-	const output = isRecord(payload) && Array.isArray(payload.output) ? payload.output : [];
-	const mime = MIME_MAP[outputFormat] ?? 'image/png';
-	const images: string[] = [];
-	const revisedPrompts: Array<string | undefined> = [];
-	const actualParamsList: Array<Partial<TaskParams> | undefined> = [];
-	for (const item of output) {
-		if (!isRecord(item) || item.type !== 'image_generation_call') continue;
-		const b64 = readResponsesImageResultBase64(item.result);
-		if (!b64) continue;
-		images.push(normalizeBase64Image(b64, mime));
-		revisedPrompts.push(getStringValue(item, 'revised_prompt'));
-		actualParamsList.push(pickActualParamsFromRecord(item));
-	}
-	if (!images.length) {
-		throw new Error('Responses API 没有返回可识别的图片数据');
-	}
-	return {
-		images,
-		revisedPrompts,
-		actualParams: actualParamsList.find((item) => item && Object.keys(item).length > 0),
-		actualParamsList,
-		rawResponsePayload: safeStringify(payload)
-	};
-}
-
-function readResponsesImageResultBase64(result: unknown): string | undefined {
-	if (typeof result === 'string' && result.trim()) return result;
-	if (!isRecord(result)) return undefined;
-	for (const key of ['b64_json', 'base64', 'image', 'data']) {
-		const value = result[key];
-		if (typeof value === 'string' && value.trim()) return value;
-	}
-	return undefined;
-}
-
-export function parseImageStreamEvents(
-	events: Array<Record<string, unknown>>,
-	outputFormat: TaskParams['output_format']
-): ParsedImageStreamEvents {
-	const mime = MIME_MAP[outputFormat] ?? 'image/png';
-	const partialImages: string[] = [];
-	const completedItems: Array<Record<string, unknown>> = [];
-	const responseOutputItems: Array<Record<string, unknown>> = [];
-	let resultPayload: unknown = null;
-
-	for (const event of events) {
-		const type = getStringValue(event, 'type');
-		const object = getStringValue(event, 'object');
-		if (
-			type === 'image_generation.partial_image' ||
-			type === 'image_edit.partial_image' ||
-			object === 'image.generation.partial_image' ||
-			object === 'image.edit.partial_image'
-		) {
-			const b64 = getStringValue(event, 'b64_json');
-			if (b64) partialImages.push(normalizeBase64Image(b64, mime));
-			continue;
-		}
-		if (type === 'response.image_generation_call.partial_image') {
-			const b64 = getStringValue(event, 'partial_image_b64');
-			if (b64) partialImages.push(normalizeBase64Image(b64, mime));
-			continue;
-		}
-		if (type === 'response.output_item.done' && isRecord(event.item)) {
-			responseOutputItems.push(event.item);
-			continue;
-		}
-		if (isRecord(event.response) && Array.isArray(event.response.output)) {
-			resultPayload = event.response;
-			continue;
-		}
-		if (object === 'image.generation.result' || object === 'image.edit.result') {
-			resultPayload = event;
-			continue;
-		}
-		if (type === 'image_generation.completed' || type === 'image_edit.completed') {
-			completedItems.push(event);
-		}
-	}
-
-	const result = resultPayload
-		? parseStreamResultPayload(resultPayload, outputFormat)
-		: responseOutputItems.length
-			? parseResponsesImageResponse({ output: responseOutputItems }, outputFormat)
-			: parseCompletedStreamItems(completedItems, outputFormat);
-	return { partialImages, result };
-}
-
-function parseStreamResultPayload(payload: unknown, outputFormat: TaskParams['output_format']): CallApiResult {
-	if (isRecord(payload) && Array.isArray(payload.output)) return parseResponsesImageResponse(payload, outputFormat);
-	return parseImagesGenerationResponse(payload, outputFormat);
-}
-
-function parseCompletedStreamItems(
-	items: Array<Record<string, unknown>>,
-	outputFormat: TaskParams['output_format']
-): CallApiResult {
-	if (!items.length) throw new Error('流式接口未返回最终图片数据');
-	const mime = MIME_MAP[outputFormat] ?? 'image/png';
-	const images = items
-		.map((item) => getStringValue(item, 'b64_json'))
-		.filter((item): item is string => Boolean(item))
-		.map((b64) => normalizeBase64Image(b64, mime));
-	if (!images.length) throw new Error('流式接口未返回可用图片数据');
-	const actualParamsList = items.map(pickActualParamsFromRecord);
-	return {
-		images,
-		revisedPrompts: items.map((item) => getStringValue(item, 'revised_prompt')),
-		actualParams: actualParamsList.find((item) => item && Object.keys(item).length > 0),
-		actualParamsList,
-		rawResponsePayload: safeStringify({ events: items })
-	};
+	const adapter = getBuiltInImageProtocolAdapter(input.profile.apiProtocol);
+	if (!adapter) throw new Error(`没有找到接口协议适配器：${input.profile.apiProtocol}`);
+	return adapter.buildRequestGroup(input);
 }
 
 export function buildCustomProviderRequestGroup(
@@ -519,30 +260,6 @@ function getCustomProvider(settings: AppSettings, provider: string): CustomProvi
 	return settings.customProviders.find((item) => item.id === provider) ?? null;
 }
 
-function orderImagesForMask(images: InputImage[], targetImageId: string) {
-	const target = images.find((image) => image.id === targetImageId);
-	if (!target) return images;
-	return [target, ...images.filter((image) => image.id !== targetImageId)];
-}
-
-function pickActualParamsFromRecord(record: Record<string, unknown>): Partial<TaskParams> | undefined {
-	const params: Partial<TaskParams> = {};
-	const size = getStringValue(record, 'size');
-	if (size) params.size = size;
-	const quality = getStringValue(record, 'quality');
-	if (quality === 'auto' || quality === 'low' || quality === 'medium' || quality === 'high') params.quality = quality;
-	const outputFormat = getStringValue(record, 'output_format');
-	if (outputFormat === 'png' || outputFormat === 'jpeg' || outputFormat === 'webp') params.output_format = outputFormat;
-	const outputCompression = record.output_compression;
-	if (typeof outputCompression === 'number' && Number.isFinite(outputCompression))
-		params.output_compression = outputCompression;
-	const moderation = getStringValue(record, 'moderation');
-	if (moderation === 'auto' || moderation === 'low') params.moderation = moderation;
-	const count = normalizeOutputImageCount(record.n, null);
-	if (count != null) params.n = count;
-	return Object.keys(params).length ? params : undefined;
-}
-
 function getByPath(source: unknown, path: string | undefined): unknown {
 	if (!path) return source;
 	return path
@@ -598,11 +315,6 @@ function isDataUrl(value: unknown): value is string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function getStringValue(source: Record<string, unknown>, key: string): string | undefined {
-	const value = source[key];
-	return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
 function safeStringify(value: unknown) {

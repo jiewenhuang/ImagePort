@@ -42,6 +42,7 @@ describe('agent runtime', () => {
 		const profile = {
 			...DEFAULT_SETTINGS.profiles[0],
 			apiMode: 'responses' as const,
+			apiProtocol: 'openai-responses' as const,
 			model: 'gpt-5.5',
 			apiKey: 'sk-test',
 			streamImages: true,
@@ -145,10 +146,27 @@ describe('agent runtime', () => {
 		);
 		expect(
 			getAgentRequestBlockReason(
-				{ ...DEFAULT_SETTINGS.profiles[0], apiMode: 'responses', apiKey: 'sk-test' },
+				{
+					...DEFAULT_SETTINGS.profiles[0],
+					apiMode: 'responses',
+					apiProtocol: 'openai-responses',
+					apiKey: 'sk-test'
+				},
 				DEFAULT_SETTINGS
 			)
 		).toBe(null);
+		expect(
+			getAgentRequestBlockReason(
+				{
+					...DEFAULT_SETTINGS.profiles[0],
+					apiMode: 'responses',
+					apiProtocol: 'openai-responses',
+					apiKey: 'sk-test',
+					baseUrl: ''
+				},
+				DEFAULT_SETTINGS
+			)?.includes('HTTP(S)')
+		).toBe(true);
 		expect(
 			createAgentAssistantFallbackText(
 				{

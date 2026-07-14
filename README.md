@@ -12,20 +12,21 @@
 ![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?style=flat-square&logo=svelte&logoColor=white)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-38BDF8?style=flat-square&logo=tailwindcss&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-10B981?style=flat-square)
+
 </div>
 
 ---
 
 ## Highlights
 
-| 能力 | 说明 |
-| --- | --- |
-| Gallery 生图与改图 | 支持 OpenAI-compatible Images API、Responses API，以及通过 manifest 接入的自定义服务商。 |
-| 参考图与蒙版 | 输入区可加入多张参考图，内置 mask 编辑器，适合反复迭代局部修改。 |
-| Agent 模式 | 基于 Responses API 的多轮创作流，支持会话、工具调用预算、partial images、停止、重试和继续。 |
-| 本地历史 | 任务记录、输入图、输出图、mask、partial images 和设置都落在本机。 |
-| 收藏与批量管理 | 支持收藏集合、集合筛选、批量下载、批量删除，以及 Lightbox 大图查看。 |
-| 完整备份 | 支持 ZIP 备份与恢复，避免把大图直接塞进大型 JSON。 |
+| 能力               | 说明                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------- |
+| Gallery 生图与改图 | 支持 OpenAI Images / Responses、xAI Imagine、Gemini Interactions 和自定义 manifest。        |
+| 参考图与蒙版       | 输入区可加入多张参考图，内置 mask 编辑器，适合反复迭代局部修改。                            |
+| Agent 模式         | 基于 Responses API 的多轮创作流，支持会话、工具调用预算、partial images、停止、重试和继续。 |
+| 本地历史           | 任务记录、输入图、输出图、mask、partial images 和设置都落在本机。                           |
+| 收藏与批量管理     | 支持收藏集合、集合筛选、批量下载、批量删除，以及 Lightbox 大图查看。                        |
+| 完整备份           | 支持 ZIP 备份与恢复，避免把大图直接塞进大型 JSON。                                          |
 
 ## Preview
 
@@ -65,12 +66,12 @@
 
 ## Tech Stack
 
-| 层 | 技术 |
-| --- | --- |
-| 桌面容器 | Tauri 2 |
-| 前端 | SvelteKit 2, Svelte 5 |
-| UI | shadcn-svelte, bits-ui, Tailwind CSS 4 |
-| 本地数据 | SQLite via `@tauri-apps/plugin-sql`, Tauri Store, FS |
+| 层       | 技术                                                  |
+| -------- | ----------------------------------------------------- |
+| 桌面容器 | Tauri 2                                               |
+| 前端     | SvelteKit 2, Svelte 5                                 |
+| UI       | shadcn-svelte, bits-ui, Tailwind CSS 4                |
+| 本地数据 | SQLite via `@tauri-apps/plugin-sql`, Tauri Store, FS  |
 | 原生能力 | Dialog, Clipboard Manager, Rust `reqwest` HTTP bridge |
 
 ## How It Works
@@ -79,7 +80,7 @@
 flowchart LR
   A["SvelteKit UI"] --> B["Provider adapter"]
   B --> C["Tauri HTTP bridge"]
-  C --> D["OpenAI-compatible / Responses / Custom provider"]
+  C --> D["OpenAI / xAI / Gemini / Custom provider"]
   A --> E["SQLite task history"]
   A --> F["App data image files"]
   A --> G["Tauri Store settings"]
@@ -121,14 +122,14 @@ bun run tauri build
 
 ## Common Commands
 
-| 命令 | 用途 |
-| --- | --- |
-| `bun test` | 运行前端与领域逻辑测试。 |
-| `bun run check` | 运行 Svelte 类型与组件检查。 |
-| `bun run build` | 构建静态前端产物。 |
-| `cd src-tauri && cargo check` | 检查 Rust/Tauri 后端。 |
-| `bun run tauri dev` | 启动桌面开发模式。 |
-| `bun run tauri build` | 打包桌面应用。 |
+| 命令                          | 用途                         |
+| ----------------------------- | ---------------------------- |
+| `bun test`                    | 运行前端与领域逻辑测试。     |
+| `bun run check`               | 运行 Svelte 类型与组件检查。 |
+| `bun run build`               | 构建静态前端产物。           |
+| `cd src-tauri && cargo check` | 检查 Rust/Tauri 后端。       |
+| `bun run tauri dev`           | 启动桌面开发模式。           |
+| `bun run tauri build`         | 打包桌面应用。               |
 
 ## Project Layout
 
@@ -151,25 +152,31 @@ ImagePort-Desktop/
 
 ## API Profiles
 
-在应用设置中创建 API Profile：
+在应用设置中创建 API 连接。模型能力预设与接口协议彼此独立：官方服务使用原生协议，第三方网关按其文档选择兼容协议，不需要为每个网站新增适配器。
 
-| Profile | 适用场景 |
-| --- | --- |
-| OpenAI Images | 常规 `/v1/images/generations` 与 `/v1/images/edits`。 |
-| OpenAI Responses | Agent 模式，以及 Gallery 的 Responses 生图/改图路径。 |
-| Custom Provider | 通过 JSON manifest 描述提交、轮询和结果解析路径。 |
+| Profile            | 适用场景                                                     |
+| ------------------ | ------------------------------------------------------------ |
+| OpenAI Images      | 常规 `/v1/images/generations` 与 `/v1/images/edits`。        |
+| OpenAI Responses   | Agent 模式，以及 Gallery 的 Responses 生图/改图路径。        |
+| xAI Grok Imagine   | Gallery 文生图与 JSON 图像编辑，支持最多 3 张参考图。        |
+| Google Nano Banana | Gallery 文生图与多参考图编辑，使用 Gemini Interactions API。 |
+| Custom Provider    | 通过 JSON manifest 描述提交、轮询和结果解析路径。            |
 
 API Key 保存在本地 Tauri Store 中。导出设置时默认不包含 API Key。
+
+内置协议包括 OpenAI Images、OpenAI Responses、xAI Imagine Images 与 Gemini Interactions。例如，Gemini/Banana 模型既可以通过 Google 官方 Interactions 调用，也可以在中转站兼容 `/v1/images/generations` 时切换到 OpenAI Images。设置页会预览最终的 `POST` 地址，并对常见协议错配给出提示。
+
+Gallery 参数会根据当前服务商和模型能力动态调整。Grok 与 Gemini 不支持像素级蒙版；Gemini 生成多张图片时会发起多次独立请求。Agent 模式目前仍使用 OpenAI Responses API。
 
 ## Local Data
 
 ImagePort 的数据默认保存在本机：
 
-| 数据 | 存储位置 |
-| --- | --- |
-| 任务记录与 Agent 会话 | SQLite |
+| 数据                                         | 存储位置          |
+| -------------------------------------------- | ----------------- |
+| 任务记录与 Agent 会话                        | SQLite            |
 | 输出图、缩略图、输入图、mask、partial images | App data 图片目录 |
-| 应用设置与输入草稿 | Tauri Store |
+| 应用设置与输入草稿                           | Tauri Store       |
 
 历史数据优先级最高：应用不会在启动时自动清理历史图片，清理动作必须由用户确认。
 

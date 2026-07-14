@@ -1,6 +1,6 @@
 import { buildApiUrl } from '$lib/domain/url';
 import type { AgentConversation, AgentToolCallSummary } from '$lib/domain/agent';
-import type { ApiProfile, AppSettings } from '$lib/domain/settings';
+import { getProfileRequestBlockReason, type ApiProfile, type AppSettings } from '$lib/domain/settings';
 import {
 	normalizeOutputImageCount,
 	type InputImage,
@@ -168,8 +168,12 @@ export function createAgentAssistantFallbackText(
 
 export function getAgentRequestBlockReason(profile: ApiProfile, settings: AppSettings): string | null {
 	if (profile.provider !== 'openai') return 'Agent 模式目前使用 OpenAI Responses API，请选择 OpenAI 配置。';
-	if (profile.apiMode !== 'responses') return 'Agent 模式需要 Responses API 配置，请在 API 设置中切换到 Responses。';
+	if (profile.apiProtocol !== 'openai-responses') {
+		return 'Agent 模式需要 OpenAI Responses API 协议，请在 API 设置中切换接口协议。';
+	}
 	if (!profile.apiKey.trim()) return '需要先配置 API Key';
+	const profileBlockReason = getProfileRequestBlockReason(profile, settings);
+	if (profileBlockReason) return profileBlockReason;
 	if (settings.agentMaxToolRounds < 1) return 'Agent 最大工具轮数配置无效';
 	return null;
 }

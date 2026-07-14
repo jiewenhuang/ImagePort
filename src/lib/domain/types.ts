@@ -111,6 +111,7 @@ export interface TaskRecord {
 	apiProfileName?: string | null;
 	apiProvider?: string | null;
 	apiMode?: ApiMode | null;
+	apiProtocol?: string | null;
 	model?: string | null;
 	rawImageUrls: string[];
 	rawResponsePayload?: string | null;
@@ -162,6 +163,7 @@ export function createEmptyTaskMetadata(): Pick<
 	| 'apiProfileName'
 	| 'apiProvider'
 	| 'apiMode'
+	| 'apiProtocol'
 	| 'model'
 	| 'rawImageUrls'
 	| 'rawResponsePayload'
@@ -176,6 +178,7 @@ export function createEmptyTaskMetadata(): Pick<
 		apiProfileName: null,
 		apiProvider: null,
 		apiMode: null,
+		apiProtocol: null,
 		model: null,
 		rawImageUrls: [],
 		rawResponsePayload: null,
