@@ -122,14 +122,15 @@ bun run tauri build
 
 ## Common Commands
 
-| 命令                          | 用途                         |
-| ----------------------------- | ---------------------------- |
-| `bun test`                    | 运行前端与领域逻辑测试。     |
-| `bun run check`               | 运行 Svelte 类型与组件检查。 |
-| `bun run build`               | 构建静态前端产物。           |
-| `cd src-tauri && cargo check` | 检查 Rust/Tauri 后端。       |
-| `bun run tauri dev`           | 启动桌面开发模式。           |
-| `bun run tauri build`         | 打包桌面应用。               |
+| 命令                          | 用途                            |
+| ----------------------------- | ------------------------------- |
+| `bun test`                    | 运行前端与领域逻辑测试。        |
+| `bun run check`               | 运行 Svelte 类型与组件检查。    |
+| `bun run build`               | 构建静态前端产物。              |
+| `cd src-tauri && cargo check` | 检查 Rust/Tauri 后端。          |
+| `bun run tauri dev`           | 启动桌面开发模式。              |
+| `bun run tauri build`         | 打包桌面应用。                  |
+| `bun run release 0.2.0`       | 同步版本、提交、打 tag 并推送。 |
 
 ## Project Layout
 
@@ -199,14 +200,12 @@ cd src-tauri && cargo check
 
 GitHub Release 自动打包由 `.github/workflows/release.yml` 负责。创建 tag 并发布 Release 后，workflow 会在 macOS、Windows 和 Linux 上分别运行 `tauri build`，并把安装包上传到当前 Release。
 
-版本同步示例：
+使用发版命令前需保证工作区干净。命令会同步 `package.json`、Tauri 配置、Cargo 包和锁文件版本，创建 release commit 与 tag，并推送当前分支和 tag：
 
 ```bash
-bun scripts/sync-version.mjs 0.2.0
-git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
-git commit -m "chore: bump version to 0.2.0"
-git tag v0.2.0
-git push origin main v0.2.0
+bun run release 0.2.0
 ```
+
+随后在 GitHub 从 `v0.2.0` 创建并发布 Release；workflow 会检出该 tag、校验四处版本一致后构建各平台安装包。
 
 当前 workflow 尚未配置代码签名、公证、Windows 签名证书或 updater 私钥；这些凭据后续可通过 GitHub Secrets 接入。

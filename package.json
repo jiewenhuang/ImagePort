@@ -13,6 +13,8 @@
 		"lint:oxc": "oxlint --deny-warnings src svelte.config.js vite.config.js",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"release": "bun scripts/release.mjs",
+		"release:check": "bun scripts/check-release-version.mjs",
 		"tauri": "tauri"
 	},
 	"dependencies": {
