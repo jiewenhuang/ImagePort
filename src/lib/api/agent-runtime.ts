@@ -1,5 +1,6 @@
 import { buildApiUrl } from '$lib/domain/url';
-import type { AgentConversation, AgentToolCallSummary } from '$lib/domain/agent';
+import type { AgentConversation, AgentRoundIntent, AgentToolCallSummary } from '$lib/domain/agent';
+import { isOfficialOpenAIResponsesEndpoint } from '$lib/domain/agent-routing';
 import { getProfileRequestBlockReason, type ApiProfile, type AppSettings } from '$lib/domain/settings';
 import {
 	normalizeOutputImageCount,
@@ -20,6 +21,7 @@ export interface BuildAgentResponsesRequestInput {
 	settings: Pick<AppSettings, 'agentMaxToolRounds' | 'agentWebSearch'>;
 	conversation: AgentConversation;
 	roundId: string;
+	intent: AgentRoundIntent;
 	prompt: string;
 	params: TaskParams;
 	inputImages: InputImage[];
@@ -28,25 +30,51 @@ export interface BuildAgentResponsesRequestInput {
 	partialImages: number;
 }
 
+export interface AgentResponseImage {
+	toolCallId: string;
+	dataUrl: string;
+	action?: string;
+	revisedPrompt?: string;
+	actualParams?: Partial<TaskParams>;
+}
+
+export interface AgentPartialImage {
+	toolCallId: string;
+	dataUrl: string;
+	partialImageIndex: number | null;
+}
+
+export interface AgentImageToolStart {
+	toolCallId: string;
+	action?: string;
+	prompt?: string;
+}
+
 export interface AgentResponsesResult {
 	responseId: string | null;
 	text: string;
-	images: string[];
-	partialImages: string[];
-	revisedPrompts: Array<string | undefined>;
-	actualParamsList: Array<Partial<TaskParams> | undefined>;
-	actualParams: Partial<TaskParams> | null;
+	unsupportedToolOutput: boolean;
+	images: AgentResponseImage[];
+	partialImages: AgentPartialImage[];
 	rawResponsePayload: string | null;
 	toolCalls: AgentToolCallSummary[];
 	toolCallCount: number;
 }
 
+export { isOfficialOpenAIResponsesEndpoint } from '$lib/domain/agent-routing';
+
+export type AgentContextStrategy = 'server-chain' | 'local-history';
+
 export function buildAgentResponsesRequest(input: BuildAgentResponsesRequestInput): NativeJsonRequest {
-	const previousResponseId = findPreviousResponseId(input.conversation, input.roundId);
+	const contextStrategy: AgentContextStrategy = isOfficialOpenAIResponsesEndpoint(input.profile.baseUrl)
+		? 'server-chain'
+		: 'local-history';
+	const previousResponseId =
+		contextStrategy === 'server-chain' ? findPreviousResponseId(input.conversation, input.roundId) : null;
 	const tools: Array<Record<string, unknown>> = [
 		buildAgentImageTool(
 			input.params,
-			input.inputImages.length > 0 || Boolean(input.mask),
+			input.intent,
 			input.mask,
 			input.partialImages
 		)
@@ -57,13 +85,22 @@ export function buildAgentResponsesRequest(input: BuildAgentResponsesRequestInpu
 
 	const body: Record<string, unknown> = {
 		model: input.profile.model,
-		input: createAgentResponsesInput(input.prompt, input.inputImages),
+		input: createAgentResponsesInput(
+			input.conversation,
+			input.roundId,
+			input.prompt,
+			input.inputImages,
+			contextStrategy
+		),
 		tools,
 		tool_choice: 'auto',
 		stream: input.stream,
 		instructions: createAgentInstructions(input.settings.agentMaxToolRounds)
 	};
-	if (previousResponseId) body.previous_response_id = previousResponseId;
+	if (contextStrategy === 'server-chain') {
+		body.store = true;
+		if (previousResponseId) body.previous_response_id = previousResponseId;
+	}
 
 	return {
 		url: buildApiUrl(input.profile.baseUrl, 'responses'),
@@ -82,17 +119,15 @@ export function parseAgentResponsesPayload(
 	outputFormat: TaskParams['output_format']
 ): AgentResponsesResult {
 	const output = isRecord(payload) && Array.isArray(payload.output) ? payload.output : [];
-	const text = readResponseText(payload, output);
+	const sanitizedText = sanitizeUnsupportedToolOutput(readResponseText(payload, output));
 	const imageResult = readImageGenerationItems(output, outputFormat);
 	const toolCalls = readToolCalls(output);
 	return {
 		responseId: isRecord(payload) ? (getString(payload.id) ?? null) : null,
-		text,
+		text: sanitizedText.text,
+		unsupportedToolOutput: sanitizedText.unsupportedToolOutput,
 		images: imageResult.images,
 		partialImages: [],
-		revisedPrompts: imageResult.revisedPrompts,
-		actualParamsList: imageResult.actualParamsList,
-		actualParams: imageResult.actualParamsList.find((item) => item && Object.keys(item).length > 0) ?? null,
 		rawResponsePayload: safeStringify(payload),
 		toolCalls,
 		toolCallCount: toolCalls.length
@@ -105,7 +140,7 @@ export function parseAgentResponsesStreamEvents(
 ): AgentResponsesResult {
 	const textDeltas: string[] = [];
 	const outputItems: unknown[] = [];
-	const partialImages: string[] = [];
+	const partialImages: AgentPartialImage[] = [];
 	let completedPayload: unknown = null;
 
 	for (const event of events) {
@@ -121,8 +156,8 @@ export function parseAgentResponsesStreamEvents(
 			continue;
 		}
 		if (type === 'response.image_generation_call.partial_image') {
-			const b64 = getString(event.partial_image_b64);
-			if (b64) partialImages.push(normalizeBase64Image(b64, MIME_MAP[outputFormat] ?? 'image/png'));
+			const partialImage = parseAgentPartialImageEvent(event, outputFormat);
+			if (partialImage) partialImages.push(partialImage);
 			continue;
 		}
 		if (type === 'response.output_item.done' && isRecord(event.item)) {
@@ -140,16 +175,34 @@ export function parseAgentResponsesStreamEvents(
 	const base = completedPayload
 		? parseAgentResponsesPayload(completedPayload, outputFormat)
 		: parseAgentResponsesPayload({ output: outputItems }, outputFormat);
-	const streamedText = textDeltas.join('');
+	const streamedText = sanitizeUnsupportedToolOutput(textDeltas.join(''));
 	return {
 		...base,
-		text: base.text || streamedText,
+		text: base.text || streamedText.text,
+		unsupportedToolOutput: base.unsupportedToolOutput || streamedText.unsupportedToolOutput,
 		partialImages,
 		rawResponsePayload: safeStringify({
 			...(completedPayload && isRecord(completedPayload) ? completedPayload : { output: outputItems }),
 			streamEventCount: events.length
 		})
 	};
+}
+
+export function sanitizeUnsupportedToolOutput(value: string): {
+	text: string;
+	unsupportedToolOutput: boolean;
+} {
+	const hasXmlToolCall = /<tool_call\b/i.test(value);
+	const hasPseudoToolCall =
+		/(?:^|\n)\s*to=(?:multi_tool_use\.[\w.-]+|functions\.[\w.-]+)\b/i.test(value) ||
+	/"recipient_name"\s*:\s*"(?:functions|multi_tool_use)\.[\w.-]+"/i.test(value);
+	if (!hasXmlToolCall && !hasPseudoToolCall) {
+		return { text: value.trim(), unsupportedToolOutput: false };
+	}
+	let text = value.replace(/<tool_call\b[^>]*>[\s\S]*?(?:<\/tool_call\s*>|$)/gi, '');
+	if (hasPseudoToolCall) text = removePseudoToolCallText(text);
+	text = text.replace(/\n{3,}/g, '\n\n').trim();
+	return { text, unsupportedToolOutput: true };
 }
 
 export function createAgentAssistantFallbackText(
@@ -163,7 +216,66 @@ export function createAgentAssistantFallbackText(
 			: `已生成 ${result.images.length}/${expectedImages} 张图片。`;
 	}
 	if (result.partialImages.length) return `已收到 ${result.partialImages.length} 张 partial 图片，但没有最终图。`;
-	return '这轮没有返回文字或图片。';
+	if (result.toolCalls.some((toolCall) => toolCall.type === 'image_generation_call')) {
+		return '图片工具已执行，但没有返回最终图片。';
+	}
+	return '这轮没有返回文字或工具结果。';
+}
+
+export function hasMeaningfulAgentResponse(result: AgentResponsesResult): boolean {
+	return Boolean(
+		result.text.trim() ||
+		result.images.length ||
+		result.partialImages.length ||
+		result.toolCalls.some((toolCall) => toolCall.type === 'image_generation_call')
+	);
+}
+
+export function parseAgentImageToolStartEvent(event: Record<string, unknown>): AgentImageToolStart | null {
+	const type = getString(event.type);
+	const item = isRecord(event.item) ? event.item : null;
+	if (type === 'response.output_item.added' && item?.type === 'image_generation_call') {
+		return {
+			toolCallId: getString(item.id) ?? getImageToolCallFallbackId(event),
+			action: getString(item.action),
+			prompt: getString(item.revised_prompt)
+		};
+	}
+	if (type === 'response.image_generation_call.in_progress' || type === 'response.image_generation_call.generating') {
+		return {
+			toolCallId: getString(event.item_id) ?? getImageToolCallFallbackId(event),
+			action: getString(event.action),
+			prompt: getString(event.revised_prompt)
+		};
+	}
+	return null;
+}
+
+export function parseAgentPartialImageEvent(
+	event: Record<string, unknown>,
+	outputFormat: TaskParams['output_format']
+): AgentPartialImage | null {
+	if (getString(event.type) !== 'response.image_generation_call.partial_image') return null;
+	const b64 = getString(event.partial_image_b64);
+	if (!b64) return null;
+	return {
+		toolCallId: getString(event.item_id) ?? getImageToolCallFallbackId(event),
+		dataUrl: normalizeBase64Image(b64, MIME_MAP[outputFormat] ?? 'image/png'),
+		partialImageIndex: getFiniteNumber(event.partial_image_index)
+	};
+}
+
+export function getAgentStreamFailureMessage(events: Array<Record<string, unknown>>): string | null {
+	for (let index = events.length - 1; index >= 0; index -= 1) {
+		const event = events[index];
+		const type = getString(event.type);
+		if (type !== 'response.failed' && type !== 'response.incomplete') continue;
+		const response = isRecord(event.response) ? event.response : null;
+		const error = response && isRecord(response.error) ? response.error : isRecord(event.error) ? event.error : null;
+		const message = error ? getString(error.message) : undefined;
+		return message ?? (type === 'response.incomplete' ? 'Agent 响应未完整结束' : 'Agent 响应失败');
+	}
+	return null;
 }
 
 export function getAgentRequestBlockReason(profile: ApiProfile, settings: AppSettings): string | null {
@@ -184,10 +296,15 @@ export function enforceAgentToolBudget(result: AgentResponsesResult, maxToolRoun
 	throw new Error(`Agent 工具调用超过上限：${result.toolCallCount}/${normalizedMax}`);
 }
 
-function buildAgentImageTool(params: TaskParams, isEdit: boolean, mask: MaskDraft | null, partialImages: number) {
+function buildAgentImageTool(
+	params: TaskParams,
+	intent: AgentRoundIntent,
+	mask: MaskDraft | null,
+	partialImages: number
+) {
 	const tool: Record<string, unknown> = {
 		type: 'image_generation',
-		action: isEdit ? 'edit' : 'auto',
+		action: intent === 'image-edit' ? 'edit' : intent === 'image-generate' ? 'generate' : 'auto',
 		size: params.size,
 		quality: params.quality,
 		output_format: params.output_format,
@@ -201,28 +318,59 @@ function buildAgentImageTool(params: TaskParams, isEdit: boolean, mask: MaskDraf
 	return tool;
 }
 
-function createAgentResponsesInput(prompt: string, inputImages: InputImage[]) {
-	if (!inputImages.length) return prompt;
-	return [
-		{
-			role: 'user',
-			content: [
-				{ type: 'input_text', text: prompt },
-				...inputImages.map((image) => ({
-					type: 'input_image',
-					image_url: image.dataUrl
-				}))
-			]
+export function createAgentResponsesInput(
+	conversation: AgentConversation,
+	roundId: string,
+	prompt: string,
+	inputImages: InputImage[],
+	contextStrategy: AgentContextStrategy
+) {
+	const currentMessage = {
+		role: 'user' as const,
+		content: inputImages.length
+			? [
+					{ type: 'input_text', text: prompt },
+					...inputImages.map((image) => ({
+						type: 'input_image',
+						image_url: image.dataUrl
+					}))
+				]
+			: prompt
+	};
+	if (contextStrategy === 'server-chain') return inputImages.length ? [currentMessage] : prompt;
+	return [...createAgentLocalHistory(conversation, roundId), currentMessage];
+}
+
+function createAgentLocalHistory(conversation: AgentConversation, roundId: string) {
+	const currentRound = conversation.rounds.find((round) => round.id === roundId);
+	if (!currentRound) return [];
+	const roundsById = new Map(conversation.rounds.map((round) => [round.id, round]));
+	return conversation.messages.flatMap((message) => {
+		const round = roundsById.get(message.roundId);
+		if (!round || round.index >= currentRound.index) return [];
+		const content =
+			message.role === 'assistant' ? sanitizeUnsupportedToolOutput(message.content).text : message.content.trim();
+		if (!content) return [];
+		if (
+			message.role === 'assistant' &&
+			((round.status !== 'done' && round.status !== 'partial') ||
+				Boolean(round.error) ||
+				content === '正在思考...' ||
+				content.startsWith('Agent 失败：'))
+		) {
+			return [];
 		}
-	];
+		return [{ role: message.role, content }];
+	});
 }
 
 function createAgentInstructions(maxToolRounds: number) {
 	const normalizedMax = Math.max(1, Math.trunc(maxToolRounds));
 	return [
-		'You are ImagePort Desktop Agent, focused on image generation and editing.',
+		'You are ImagePort Desktop Agent, an image-creation assistant in a multi-turn workspace.',
 		`Do not exceed ${normalizedMax} tool calls in this turn.`,
-		'When creating or editing images, use the image_generation tool and keep text concise.'
+		'Only call image_generation when the user explicitly asks to create or edit an image; otherwise reply with text.',
+		'When creating or editing images, use the image_generation tool and keep visible text concise.'
 	].join('\n');
 }
 
@@ -255,33 +403,44 @@ function readResponseText(payload: unknown, output: unknown[]) {
 
 function readImageGenerationItems(output: unknown[], outputFormat: TaskParams['output_format']) {
 	const mime = MIME_MAP[outputFormat] ?? 'image/png';
-	const images: string[] = [];
-	const revisedPrompts: Array<string | undefined> = [];
-	const actualParamsList: Array<Partial<TaskParams> | undefined> = [];
+	const images: AgentResponseImage[] = [];
+	let imageCallIndex = 0;
 	for (const item of output) {
 		if (!isRecord(item) || item.type !== 'image_generation_call') continue;
+		const toolCallId = getString(item.id) ?? `image-call-${imageCallIndex + 1}`;
+		imageCallIndex += 1;
 		const b64 = readImageResultBase64(item.result);
 		if (!b64) continue;
-		images.push(normalizeBase64Image(b64, mime));
-		revisedPrompts.push(getString(item.revised_prompt));
-		actualParamsList.push(pickActualParamsFromRecord(item));
+		images.push({
+			toolCallId,
+			dataUrl: normalizeBase64Image(b64, mime),
+			action: getString(item.action),
+			revisedPrompt: getString(item.revised_prompt),
+			actualParams: pickActualParamsFromRecord(item)
+		});
 	}
-	return { images, revisedPrompts, actualParamsList };
+	return { images };
 }
 
 function readToolCalls(output: unknown[]): AgentToolCallSummary[] {
-	return output.filter(isRecord).flatMap((item) => {
+	const toolCalls: AgentToolCallSummary[] = [];
+	let imageCallIndex = 0;
+	for (const item of output.filter(isRecord)) {
 		const type = getString(item.type);
-		if (!type || (!type.endsWith('_call') && type !== 'web_search_call')) return [];
-		return [
-			{
-				id: getString(item.id) ?? null,
-				type,
-				status: getString(item.status) ?? null,
-				title: getToolCallTitle(item)
-			}
-		];
-	});
+		if (!type || (!type.endsWith('_call') && type !== 'web_search_call')) continue;
+		const id =
+			type === 'image_generation_call'
+				? (getString(item.id) ?? `image-call-${imageCallIndex + 1}`)
+				: (getString(item.id) ?? null);
+		if (type === 'image_generation_call') imageCallIndex += 1;
+		toolCalls.push({
+			id,
+			type,
+			status: getString(item.status) ?? null,
+			title: getToolCallTitle(item)
+		});
+	}
+	return toolCalls;
 }
 
 function getToolCallTitle(item: Record<string, unknown>) {
@@ -338,10 +497,61 @@ function getRawString(value: unknown): string | undefined {
 	return typeof value === 'string' && value.length ? value : undefined;
 }
 
+function getFiniteNumber(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function getImageToolCallFallbackId(event: Record<string, unknown>) {
+	const outputIndex = getFiniteNumber(event.output_index) ?? 0;
+	return `image-call-${outputIndex + 1}`;
+}
+
 function safeStringify(value: unknown) {
 	try {
 		return JSON.stringify(value);
 	} catch {
 		return null;
 	}
+}
+
+function removePseudoToolCallText(value: string) {
+	const marker = /(?:^|\n)\s*to=(?:multi_tool_use\.[\w.-]+|functions\.[\w.-]+)\b[^\n]*/i.exec(value);
+	if (!marker || marker.index < 0) return value;
+	const start = marker.index;
+	const afterMarker = start + marker[0].length;
+	const remainder = value.slice(afterMarker);
+	const jsonStart = remainder.search(/[[{]/);
+	if (jsonStart < 0) return `${value.slice(0, start)}${remainder}`;
+	const absoluteJsonStart = afterMarker + jsonStart;
+	const jsonEnd = findBalancedJsonEnd(value, absoluteJsonStart);
+	if (jsonEnd === -1) return `${value.slice(0, start)}${value.slice(absoluteJsonStart)}`;
+	return `${value.slice(0, start)}${value.slice(jsonEnd + 1)}`;
+}
+
+function findBalancedJsonEnd(value: string, start: number) {
+	const opening = value[start];
+	if (opening !== '{' && opening !== '[') return -1;
+	const closing = opening === '{' ? '}' : ']';
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let index = start; index < value.length; index += 1) {
+		const char = value[index];
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (char === '\\') escaped = true;
+			else if (char === '"') inString = false;
+			continue;
+		}
+		if (char === '"') {
+			inString = true;
+			continue;
+		}
+		if (char === opening) depth += 1;
+		else if (char === closing) {
+			depth -= 1;
+			if (depth === 0) return index;
+		}
+	}
+	return -1;
 }

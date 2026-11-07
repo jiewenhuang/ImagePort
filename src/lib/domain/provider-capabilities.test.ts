@@ -2,6 +2,18 @@ import { describe, expect, test } from 'bun:test';
 import { getProviderCapabilities, getProviderInputValidationMessage } from './provider-capabilities';
 
 describe('provider capabilities', () => {
+	test('does not offer unsupported output formats for generateContent', () => {
+		for (const apiProtocol of ['gemini-generate-content', 'gemini-generate-content-response-format'] as const) {
+			const capabilities = getProviderCapabilities({
+				provider: 'google',
+				model: 'gemini-nano-banana-2.1',
+				apiMode: 'images',
+				apiProtocol
+			});
+			expect(capabilities.formatOptions).toEqual(['png']);
+		}
+	});
+
 	test('exposes xAI edit constraints', () => {
 		const capabilities = getProviderCapabilities({
 			provider: 'xai',

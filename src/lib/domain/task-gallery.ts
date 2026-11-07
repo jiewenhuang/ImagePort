@@ -1,3 +1,4 @@
+import { getTaskOutputCount, getTaskPartialCount } from './task-media';
 import type { TaskRecord } from './types';
 
 export const TASK_PAGE_SIZE = 24;
@@ -74,7 +75,7 @@ export function getSelectedCompletedTasks(tasks: TaskRecord[], selectedTaskIds: 
 	return tasks.filter(
 		(task) =>
 			selectedIds.has(task.id) &&
-			(task.images.length > 0 || task.streamPartialImageIds.length > 0) &&
+			(getTaskOutputCount(task) > 0 || getTaskPartialCount(task) > 0) &&
 			task.status !== 'running'
 	);
 }

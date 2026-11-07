@@ -28,8 +28,8 @@ describe('gallery settings storage helpers', () => {
 	});
 
 	test('labels storage estimates as loaded task export estimates when history is partially loaded', () => {
-		expect(getTaskStorageEstimateLabel(24, 60)).toBe('已加载任务导出 JSON 估算');
-		expect(getTaskStorageEstimateLabel(24, 24)).toBe('导出 JSON 估算');
+		expect(getTaskStorageEstimateLabel(24, 60)).toBe('已加载预览数据估算');
+		expect(getTaskStorageEstimateLabel(24, 24)).toBe('预览数据估算');
 	});
 
 	test('requests storage estimates only for tabs that display them', () => {

@@ -1,11 +1,12 @@
 import Database from '@tauri-apps/plugin-sql';
+import { invoke } from '@tauri-apps/api/core';
 import { normalizeAgentConversations, type AgentConversation } from '$lib/domain/agent';
 import {
 	normalizeTasks,
 	shouldPersistTaskSnapshot,
 	type TaskSnapshotPersistenceOptions
 } from '$lib/domain/task-storage';
-import type { TaskRecord } from '$lib/domain/types';
+import type { StoredTaskMedia, TaskRecord } from '$lib/domain/types';
 import {
 	listStoredImages,
 	readDataUrlImage,
@@ -74,13 +75,7 @@ export interface FileBackedTaskPayload {
 		inputImages: Array<Omit<TaskRecord['inputImages'][number], 'dataUrl'> & { dataUrl: string }>;
 		mask: null;
 	};
-	imageRefs: {
-		outputs: StoredImageFile[];
-		thumbnails: StoredImageFile[];
-		partials?: StoredImageFile[];
-		inputs: Array<StoredImageFile & { id: string; name: string }>;
-		mask: (StoredImageFile & { targetImageId: string; updatedAt: number }) | null;
-	};
+	imageRefs: StoredTaskMedia;
 }
 
 const tauriImageFileStore: TaskImageFileStore = {
@@ -97,7 +92,7 @@ let dbPromise: Promise<Database | null> | null = null;
 let saveQueue: Promise<boolean> = Promise.resolve(true);
 let agentSaveQueue: Promise<boolean> = Promise.resolve(true);
 
-async function getGalleryDb(): Promise<Database | null> {
+export async function getGalleryDb(): Promise<Database | null> {
 	if (!canUseTauriPlugins()) return null;
 	dbPromise ??= initGalleryDb();
 	return dbPromise;
@@ -130,15 +125,18 @@ async function initGalleryDb(): Promise<Database> {
 	await db.execute(
 		'CREATE INDEX IF NOT EXISTS idx_agent_conversations_updated_at ON agent_conversations(updated_at DESC)'
 	);
+
 	return db;
 }
 
-export async function loadStoredTasks(): Promise<TaskRecord[] | null> {
+export async function loadStoredTasks(media: 'full' | 'preview' = 'full'): Promise<TaskRecord[] | null> {
 	const db = await getGalleryDb();
 	if (!db) return null;
-	const rows = await db.select<TaskRow[]>('SELECT id, payload FROM gallery_tasks ORDER BY created_at DESC');
-	const payloads = await Promise.all(rows.map((row) => hydrateStoredPayload(row.payload, tauriImageFileStore)));
-	return normalizeTasks(payloads);
+	const rows = await selectStoredTaskRows(db, media);
+	const payloads = await Promise.all(rows.map((row) => hydrateStoredPayload(row.payload, tauriImageFileStore, media)));
+	const tasks = normalizeTasks(payloads);
+	if (tasks.length !== rows.length) throw new Error('部分历史记录无法读取，已停止本次数据操作，请从备份恢复。');
+	return tasks;
 }
 
 export async function loadStoredTasksPage(input: StoredTaskPageRequest = {}): Promise<StoredTaskPage | null> {
@@ -147,7 +145,9 @@ export async function loadStoredTasksPage(input: StoredTaskPageRequest = {}): Pr
 	const offset = normalizePaginationNumber(input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
 	const limit = normalizePaginationNumber(input.limit, 48, 1, 500);
 	const [total, rows] = await Promise.all([countTaskRows(db), selectTaskRowsPage(db, { offset, limit })]);
-	const payloads = await Promise.all(rows.map((row) => hydrateStoredPayload(row.payload, tauriImageFileStore)));
+	const payloads = await Promise.all(
+		rows.map((row) => hydrateStoredPayload(row.payload, tauriImageFileStore, 'preview'))
+	);
 	return {
 		tasks: normalizeTasks(payloads),
 		offset,
@@ -155,6 +155,15 @@ export async function loadStoredTasksPage(input: StoredTaskPageRequest = {}): Pr
 		total,
 		hasMore: offset + rows.length < total
 	};
+}
+
+export async function loadStoredTask(taskId: string): Promise<TaskRecord | null> {
+	await saveQueue;
+	const db = await getGalleryDb();
+	if (!db) return null;
+	const rows = await db.select<TaskRow[]>('SELECT id, payload FROM gallery_tasks WHERE id = $1', [taskId]);
+	if (!rows[0]) return null;
+	return normalizeTasks([await hydrateStoredPayload(rows[0].payload, tauriImageFileStore)])[0] ?? null;
 }
 
 export async function saveStoredTasks(
@@ -190,18 +199,21 @@ async function saveStoredTasksNow(normalizedTasks: TaskRecord[]): Promise<boolea
 			payload: await createFileBackedTaskPayload(task, tauriImageFileStore)
 		}))
 	);
-	await runSqlBatchWithTransaction(db, [
-		...rows.map(
-			({ task, payload }) =>
-				(executor: GalleryDbExecutor) =>
-					upsertTaskRow(executor, task, payload)
-		),
-		(executor) =>
-			deleteTasksOutsideSnapshot(
-				executor,
-				normalizedTasks.map((task) => task.id)
-			)
-	]);
+	await invoke('save_workspace_snapshot', {
+		snapshot: {
+			kind: 'tasks',
+			rows: rows.map(({ task, payload }) => ({
+				id: task.id,
+				prompt: task.prompt,
+				status: task.status,
+				createdAt: task.createdAt,
+				finishedAt: task.finishedAt,
+				payload: JSON.stringify(payload),
+				updatedAt: Date.now(),
+				preserveRawResponse: !!task.storedMedia
+			}))
+		}
+	});
 	return true;
 }
 
@@ -245,26 +257,18 @@ export async function saveStoredAgentConversations(conversations: AgentConversat
 async function saveStoredAgentConversationsNow(conversations: AgentConversation[]): Promise<boolean> {
 	const db = await getGalleryDb();
 	if (!db) return false;
-	await runSqlBatchWithTransaction(db, [
-		...conversations.map(
-			(conversation) => (executor: GalleryDbExecutor) =>
-				executor.execute(
-					`INSERT INTO agent_conversations (id, title, created_at, updated_at, payload)
-				 VALUES ($1, $2, $3, $4, $5)
-				 ON CONFLICT(id) DO UPDATE SET
-					title = excluded.title,
-					created_at = excluded.created_at,
-					updated_at = excluded.updated_at,
-					payload = excluded.payload`,
-					createAgentConversationRow(conversation)
-				)
-		),
-		(executor) =>
-			deleteAgentConversationsOutsideSnapshot(
-				executor,
-				conversations.map((conversation) => conversation.id)
-			)
-	]);
+	await invoke('save_workspace_snapshot', {
+		snapshot: {
+			kind: 'agentConversations',
+			rows: conversations.map((conversation) => ({
+				id: conversation.id,
+				title: conversation.title,
+				createdAt: conversation.createdAt,
+				updatedAt: conversation.updatedAt,
+				payload: JSON.stringify(conversation)
+			}))
+		}
+	});
 	return true;
 }
 
@@ -279,6 +283,10 @@ export function createAgentConversationRow(conversation: AgentConversation): unk
 }
 
 export async function upsertTaskRow(db: GalleryDbExecutor, task: TaskRecord, payload: unknown): Promise<void> {
+	// Preview records omit the potentially very large provider response. Keep it in SQLite when only metadata changes.
+	const updatedPayload = task.storedMedia
+		? "json_set(excluded.payload, '$.task.rawResponsePayload', json_extract(gallery_tasks.payload, '$.task.rawResponsePayload'))"
+		: 'excluded.payload';
 	await db.execute(
 		`INSERT INTO gallery_tasks (id, prompt, status, created_at, finished_at, payload, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -287,7 +295,7 @@ export async function upsertTaskRow(db: GalleryDbExecutor, task: TaskRecord, pay
 			status = excluded.status,
 			created_at = excluded.created_at,
 			finished_at = excluded.finished_at,
-			payload = excluded.payload,
+			payload = ${updatedPayload},
 			updated_at = excluded.updated_at`,
 		serializeTaskRow(task, payload)
 	);
@@ -304,57 +312,24 @@ export async function selectTaskRowsPage(
 	db: GalleryDbSelector,
 	input: Required<StoredTaskPageRequest>
 ): Promise<TaskRow[]> {
-	return db.select<TaskRow[]>('SELECT id, payload FROM gallery_tasks ORDER BY created_at DESC LIMIT $1 OFFSET $2', [
-		input.limit,
-		input.offset
-	]);
+	return db.select<TaskRow[]>(
+		"SELECT id, json_remove(payload, '$.task.rawResponsePayload') AS payload FROM gallery_tasks ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+		[input.limit, input.offset]
+	);
+}
+
+export async function selectStoredTaskRows(
+	db: GalleryDbSelector,
+	media: 'full' | 'preview' = 'full'
+): Promise<TaskRow[]> {
+	const payload = media === 'preview' ? "json_remove(payload, '$.task.rawResponsePayload')" : 'payload';
+	return db.select<TaskRow[]>(`SELECT id, ${payload} AS payload FROM gallery_tasks ORDER BY created_at DESC`);
 }
 
 export async function countTaskRows(db: GalleryDbSelector): Promise<number> {
 	const rows = await db.select<Array<{ count: number | string | null }>>('SELECT COUNT(*) as count FROM gallery_tasks');
 	const count = Number(rows[0]?.count ?? 0);
 	return Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0;
-}
-
-export async function runSqlBatchWithTransaction(
-	db: GalleryDbExecutor,
-	operations: Array<(executor: GalleryDbExecutor) => Promise<unknown>>
-): Promise<void> {
-	try {
-		await db.execute('BEGIN IMMEDIATE');
-	} catch {
-		await runSqlOperations(db, operations);
-		return;
-	}
-
-	try {
-		await runSqlOperations(db, operations);
-	} catch (err) {
-		await rollbackSqlTransaction(db);
-		throw err;
-	}
-
-	try {
-		await db.execute('COMMIT');
-	} catch {
-		await rollbackSqlTransaction(db);
-		await runSqlOperations(db, operations);
-	}
-}
-
-async function runSqlOperations(
-	db: GalleryDbExecutor,
-	operations: Array<(executor: GalleryDbExecutor) => Promise<unknown>>
-): Promise<void> {
-	for (const operation of operations) await operation(db);
-}
-
-async function rollbackSqlTransaction(db: GalleryDbExecutor): Promise<void> {
-	try {
-		await db.execute('ROLLBACK');
-	} catch {
-		// The sqlite plugin can report "no transaction is active" after a failed COMMIT; the fallback path is safer than surfacing rollback noise.
-	}
 }
 
 export async function deleteTaskImageFiles(task: TaskRecord): Promise<void> {
@@ -370,7 +345,8 @@ export async function deleteTaskImageFiles(task: TaskRecord): Promise<void> {
 
 export async function cleanupUnreferencedTaskImageFiles(
 	tasks: TaskRecord[],
-	index: StoredImageFileIndex = tauriImageFileIndex
+	index: StoredImageFileIndex = tauriImageFileIndex,
+	readStoredRows: () => Promise<TaskRow[]> = loadAllStoredTaskRows
 ): Promise<CleanupImageFilesResult> {
 	const referencedPaths = new Set<string>();
 	for (const task of normalizeTasks(tasks)) {
@@ -381,6 +357,16 @@ export async function cleanupUnreferencedTaskImageFiles(
 			read: tauriImageFileStore.read
 		});
 		for (const file of getTaskPayloadImageFiles(payload)) referencedPaths.add(file.path);
+	}
+
+	for (const row of await readStoredRows()) {
+		const payload = parseTaskPayload(row.payload);
+		if (!payload || (!isFileBackedTaskPayload(payload) && !normalizeTasks([payload]).length)) {
+			throw new Error('历史记录无法读取，已暂停图片清理。');
+		}
+		if (isFileBackedTaskPayload(payload)) {
+			for (const file of getTaskPayloadImageFiles(payload)) referencedPaths.add(file.path);
+		}
 	}
 
 	const storedFiles = await index.list();
@@ -395,6 +381,12 @@ export async function cleanupUnreferencedTaskImageFiles(
 	};
 }
 
+async function loadAllStoredTaskRows(): Promise<TaskRow[]> {
+	await saveQueue;
+	const db = await getGalleryDb();
+	return db ? selectStoredTaskRows(db, 'preview') : [];
+}
+
 export function serializeTaskRow(task: TaskRecord, payload: unknown = task): unknown[] {
 	return [task.id, task.prompt, task.status, task.createdAt, task.finishedAt, JSON.stringify(payload), Date.now()];
 }
@@ -407,29 +399,19 @@ export function parseTaskPayload(payload: string): unknown {
 	}
 }
 
-async function deleteTasksOutsideSnapshot(db: GalleryDbExecutor, keptIds: string[]): Promise<void> {
-	if (keptIds.length === 0) {
-		await db.execute('DELETE FROM gallery_tasks');
-		return;
-	}
-	const placeholders = keptIds.map((_, index) => `$${index + 1}`).join(', ');
-	await db.execute(`DELETE FROM gallery_tasks WHERE id NOT IN (${placeholders})`, keptIds);
-}
-
-async function deleteAgentConversationsOutsideSnapshot(db: GalleryDbExecutor, keptIds: string[]): Promise<void> {
-	if (keptIds.length === 0) {
-		await db.execute('DELETE FROM agent_conversations');
-		return;
-	}
-	const placeholders = keptIds.map((_, index) => `$${index + 1}`).join(', ');
-	await db.execute(`DELETE FROM agent_conversations WHERE id NOT IN (${placeholders})`, keptIds);
-}
-
 export async function createFileBackedTaskPayload(
 	task: TaskRecord,
 	files: TaskImageFileStore,
 	createThumbnail: ThumbnailGenerator = createThumbnailDataUrl
 ): Promise<FileBackedTaskPayload> {
+	if (task.storedMedia) {
+		const { storedMedia, ...metadata } = task;
+		return {
+			version: 2,
+			task: { ...metadata, images: [], thumbnailImages: [], streamPartialImageIds: [], inputImages: [], mask: null },
+			imageRefs: storedMedia
+		};
+	}
 	const outputRefs = await Promise.all(
 		task.images.map((image, index) => saveTaskImage(files, 'outputs', `${task.id}-${index + 1}`, image))
 	);
@@ -477,6 +459,32 @@ export async function createFileBackedTaskPayload(
 	};
 }
 
+export async function previewFileBackedTaskPayload(
+	payload: FileBackedTaskPayload,
+	files: TaskImageFileStore
+): Promise<TaskRecord> {
+	// Older file-backed records may not yet have thumbnails.
+	const thumbnailFiles = payload.imageRefs.thumbnails?.length
+		? payload.imageRefs.thumbnails
+		: payload.imageRefs.outputs;
+	const thumbnails = (await Promise.all(thumbnailFiles.map((file) => files.read(file)))).filter(
+		(image): image is string => Boolean(image)
+	);
+	const partialFiles = payload.imageRefs.outputs.length ? [] : (payload.imageRefs.partials ?? []).slice(-1);
+	const partials = (await Promise.all(partialFiles.map((file) => files.read(file)))).filter((image): image is string =>
+		Boolean(image)
+	);
+	return {
+		...payload.task,
+		images: thumbnails,
+		thumbnailImages: thumbnails,
+		inputImages: [],
+		mask: null,
+		streamPartialImageIds: partials.length ? partials : (payload.task.streamPartialImageIds ?? []),
+		storedMedia: { ...payload.imageRefs, thumbnails: payload.imageRefs.thumbnails ?? [] }
+	};
+}
+
 export async function hydrateFileBackedTaskPayload(
 	payload: FileBackedTaskPayload,
 	files: TaskImageFileStore
@@ -503,6 +511,15 @@ export async function hydrateFileBackedTaskPayload(
 			}
 		: null;
 
+	const missingOutputs = images.filter((image) => !image).length;
+	const missingInputs = inputImages.filter((image) => !image.dataUrl).length;
+	const missingMask = Boolean(payload.imageRefs.mask && !mask?.dataUrl);
+	if (missingOutputs || missingInputs || missingMask) {
+		throw new Error(
+			`本地图片文件缺失（输出 ${missingOutputs}、参考图 ${missingInputs}、蒙版 ${missingMask ? 1 : 0}），请从备份恢复后再操作。`
+		);
+	}
+
 	return {
 		...payload.task,
 		images: images.filter((image): image is string => typeof image === 'string' && image.length > 0),
@@ -515,9 +532,17 @@ export async function hydrateFileBackedTaskPayload(
 	};
 }
 
-async function hydrateStoredPayload(payload: string, files: TaskImageFileStore): Promise<unknown> {
+async function hydrateStoredPayload(
+	payload: string,
+	files: TaskImageFileStore,
+	media: 'full' | 'preview' = 'full'
+): Promise<unknown> {
 	const parsed = parseTaskPayload(payload);
-	if (isFileBackedTaskPayload(parsed)) return hydrateFileBackedTaskPayload(parsed, files);
+	if (isFileBackedTaskPayload(parsed)) {
+		return media === 'preview'
+			? previewFileBackedTaskPayload(parsed, files)
+			: hydrateFileBackedTaskPayload(parsed, files);
+	}
 	return parsed;
 }
 

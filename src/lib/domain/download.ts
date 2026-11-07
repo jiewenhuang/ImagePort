@@ -1,3 +1,4 @@
+import { assertTaskMediaLoaded } from './task-media';
 import type { TaskRecord } from './types';
 
 export interface TaskImageDownloadEntry {
@@ -8,6 +9,7 @@ export interface TaskImageDownloadEntry {
 }
 
 export function buildTaskImageDownloadEntries(tasks: TaskRecord[]): TaskImageDownloadEntry[] {
+	tasks.forEach(assertTaskMediaLoaded);
 	return tasks.flatMap((task) => {
 		if (!task.images.length && !task.streamPartialImageIds.length) return [];
 		const folder = `${formatTimestampForFileName(task.createdAt)}-${createSafeDownloadFileName(task.prompt, 48)}`;

@@ -17,7 +17,8 @@ pub fn run() {
             commands::http::cancel_native_request,
             commands::http::native_multipart_request,
             commands::http::native_multipart_stream_request,
-            commands::http::download_image_as_data_url
+            commands::http::download_image_as_data_url,
+            commands::storage::save_workspace_snapshot
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

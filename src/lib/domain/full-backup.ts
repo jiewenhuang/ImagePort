@@ -1,3 +1,4 @@
+import { assertTaskMediaLoaded } from './task-media';
 import { dataUrlToDownloadBytes, extensionFromDataUrl } from './download';
 import type { AgentConversation } from './agent';
 import type { AppSettings } from './settings';
@@ -34,6 +35,7 @@ export function buildFullBackupPayload(
 	exportedAt = Date.now(),
 	agentConversations: AgentConversation[] = []
 ): FullBackupPayload {
+	tasks.forEach(assertTaskMediaLoaded);
 	const files: FullBackupFile[] = [];
 	const manifestTasks = tasks.map((task) => {
 		const taskDir = `tasks/${task.id}`;

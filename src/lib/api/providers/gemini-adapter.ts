@@ -109,7 +109,7 @@ export function parseGeminiImageResponse(payload: unknown): CallApiResult {
 			for (const candidate of payload.candidates) {
 				if (!isRecord(candidate) || !isRecord(candidate.content) || !Array.isArray(candidate.content.parts)) continue;
 				for (const part of candidate.content.parts) {
-					if (!isRecord(part)) continue;
+					if (!isRecord(part) || part.thought === true) continue;
 					addImage(part.inlineData);
 					addImage(part.inline_data);
 				}

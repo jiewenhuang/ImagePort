@@ -33,6 +33,7 @@
 	let customRatio = $state('16:9');
 	let customWidth = $state('1024');
 	let customHeight = $state('1024');
+	let initializedForOpen = $state(false);
 
 	let activeRatio = $derived(ratio === 'custom' ? customRatio : ratio);
 	let ratioOptions = $derived(availableRatios.map((value) => ({ label: value, value })));
@@ -51,7 +52,12 @@
 	});
 
 	$effect(() => {
-		if (!open) return;
+		if (!open) {
+			initializedForOpen = false;
+			return;
+		}
+		if (initializedForOpen) return;
+		initializedForOpen = true;
 		mode = currentSize === 'auto' ? 'auto' : 'ratio';
 		if (!availableTiers.includes(tier)) tier = availableTiers[0] ?? '1K';
 		if (!availableRatios.includes(ratio)) ratio = availableRatios[0] ?? '1:1';

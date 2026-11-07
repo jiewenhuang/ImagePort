@@ -1,9 +1,18 @@
+export const CURRENT_SETTINGS_SCHEMA_VERSION = 2;
+
 export type BuiltInApiProvider = 'openai' | 'xai' | 'google';
 export type ApiProvider = BuiltInApiProvider | string;
 export type ApiMode = 'images' | 'responses';
-export type BuiltInImageApiProtocol = 'openai-images' | 'openai-responses' | 'xai-imagine' | 'gemini-interactions';
+export type BuiltInImageApiProtocol =
+	| 'openai-images'
+	| 'openai-responses'
+	| 'xai-imagine'
+	| 'gemini-interactions'
+	| 'gemini-generate-content'
+	| 'gemini-generate-content-response-format';
 export type ImageApiProtocol = BuiltInImageApiProtocol | 'custom';
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask';
+export type AgentImageRoutingStrategy = 'auto' | 'native' | 'profile';
 export type CustomProviderRequestMethod = 'GET' | 'POST';
 export type CustomProviderContentType = 'json' | 'multipart';
 export type CustomProviderFileSource = 'inputImages' | 'mask';
@@ -108,9 +117,19 @@ export interface ApiProfile {
 	>;
 }
 
+export type WorkspaceProfileRole = 'gallery' | 'agent' | 'agent-image';
+
+export interface WorkspaceApiRouting {
+	galleryProfileId: string;
+	agentProfileId: string;
+	agentImageProfileId: string | null;
+}
+
 export interface AppSettings {
+	schemaVersion: typeof CURRENT_SETTINGS_SCHEMA_VERSION;
 	profiles: ApiProfile[];
 	activeProfileId: string;
+	workspaceRouting: WorkspaceApiRouting;
 	customProviders: CustomProviderDefinition[];
 	clearInputAfterSubmit: boolean;
 	persistInputOnRestart: boolean;
@@ -123,13 +142,14 @@ export interface AppSettings {
 	agentMaxToolRounds: number;
 	agentAutoScroll: boolean;
 	agentWebSearch: boolean;
+	agentImageRoutingStrategy: AgentImageRoutingStrategy;
 	favoriteCollections: FavoriteCollectionSetting[];
 	activeFavoriteCollectionId: string | null;
 	defaultFavoriteCollectionId: string;
 }
 
 export interface ExportedSettings {
-	version: 1;
+	version: 2;
 	settings: AppSettings;
 }
 
@@ -152,6 +172,7 @@ export const DEFAULT_ZIP_DOWNLOAD_ROUTES: ZipDownloadRoute[] = [
 export const DEFAULT_FAVORITE_COLLECTION_ID = 'favorites-default';
 
 export const DEFAULT_SETTINGS: AppSettings = {
+	schemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION,
 	profiles: [
 		{
 			id: DEFAULT_PROFILE_ID,
@@ -170,6 +191,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
 		}
 	],
 	activeProfileId: DEFAULT_PROFILE_ID,
+	workspaceRouting: {
+		galleryProfileId: DEFAULT_PROFILE_ID,
+		agentProfileId: DEFAULT_PROFILE_ID,
+		agentImageProfileId: null
+	},
 	customProviders: [],
 	clearInputAfterSubmit: false,
 	persistInputOnRestart: true,
@@ -182,6 +208,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	agentMaxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,
 	agentAutoScroll: true,
 	agentWebSearch: false,
+	agentImageRoutingStrategy: 'auto',
 	favoriteCollections: [
 		{
 			id: DEFAULT_FAVORITE_COLLECTION_ID,
@@ -224,10 +251,13 @@ export function normalizeSettings(value: unknown): AppSettings {
 	const normalizedProfiles: ApiProfile[] = profiles.length ? dedupeProfiles(profiles) : [fallbackProfile];
 	const activeProfileId = getString(record.activeProfileId, DEFAULT_SETTINGS.activeProfileId);
 	const hasActive = normalizedProfiles.some((profile) => profile.id === activeProfileId);
+	const normalizedActiveProfileId = hasActive ? activeProfileId : normalizedProfiles[0].id;
 
 	return {
+		schemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION,
 		profiles: normalizedProfiles,
-		activeProfileId: hasActive ? activeProfileId : normalizedProfiles[0].id,
+		activeProfileId: normalizedActiveProfileId,
+		workspaceRouting: normalizeWorkspaceRouting(record.workspaceRouting, normalizedProfiles, normalizedActiveProfileId),
 		customProviders,
 		clearInputAfterSubmit: getBoolean(record.clearInputAfterSubmit, DEFAULT_SETTINGS.clearInputAfterSubmit),
 		persistInputOnRestart: getBoolean(record.persistInputOnRestart, DEFAULT_SETTINGS.persistInputOnRestart),
@@ -246,6 +276,7 @@ export function normalizeSettings(value: unknown): AppSettings {
 		agentMaxToolRounds: normalizeAgentMaxToolRounds(record.agentMaxToolRounds),
 		agentAutoScroll: getBoolean(record.agentAutoScroll, DEFAULT_SETTINGS.agentAutoScroll),
 		agentWebSearch: getBoolean(record.agentWebSearch, DEFAULT_SETTINGS.agentWebSearch),
+		agentImageRoutingStrategy: normalizeAgentImageRoutingStrategy(record.agentImageRoutingStrategy),
 		favoriteCollections: normalizeFavoriteCollectionSettings(record.favoriteCollections),
 		activeFavoriteCollectionId: getNullableString(record.activeFavoriteCollectionId),
 		defaultFavoriteCollectionId: getString(record.defaultFavoriteCollectionId, DEFAULT_FAVORITE_COLLECTION_ID)
@@ -254,6 +285,18 @@ export function normalizeSettings(value: unknown): AppSettings {
 
 export function getActiveProfile(settings: AppSettings): ApiProfile {
 	return settings.profiles.find((profile) => profile.id === settings.activeProfileId) ?? settings.profiles[0];
+}
+
+export function getWorkspaceProfile(settings: AppSettings, role: WorkspaceProfileRole): ApiProfile {
+	if (role === 'agent-image') {
+		const profileId = settings.workspaceRouting.agentImageProfileId ?? settings.workspaceRouting.galleryProfileId;
+		return settings.profiles.find((profile) => profile.id === profileId) ?? getActiveProfile(settings);
+	}
+	const routingKey = role === 'gallery' ? 'galleryProfileId' : 'agentProfileId';
+	return (
+		settings.profiles.find((profile) => profile.id === settings.workspaceRouting[routingKey]) ??
+		getActiveProfile(settings)
+	);
 }
 
 export function getTaskReuseProfile(settings: AppSettings, task: ReusableTaskProfileSnapshot): ApiProfile | null {
@@ -279,7 +322,7 @@ export function getProfileRequestBlockReason(profile: ApiProfile, settings?: App
 		profile.apiProtocol === 'openai-images' &&
 		baseUrl.hostname.toLowerCase() === 'generativelanguage.googleapis.com'
 	) {
-		return 'Google 官方地址不支持 OpenAI Images 协议，请改用 Gemini Interactions，或填写支持 OpenAI Images 的中转地址。';
+		return 'Google 官方地址不支持 OpenAI Images 协议，请改用 Gemini Interactions 或 generateContent，或填写支持 OpenAI Images 的中转地址。';
 	}
 	return null;
 }
@@ -324,10 +367,20 @@ export function removeProfile(settings: AppSettings, profileId: string): AppSett
 	if (settings.profiles.length <= 1) return normalizeSettings(settings);
 	const profiles = settings.profiles.filter((profile) => profile.id !== profileId);
 	if (!profiles.length) return normalizeSettings(settings);
+	const fallbackProfileId = profiles[0].id;
+	const replaceRemovedRoute = (candidate: string) => (candidate === profileId ? fallbackProfileId : candidate);
 	return {
 		...settings,
 		profiles,
-		activeProfileId: settings.activeProfileId === profileId ? profiles[0]?.id : settings.activeProfileId
+		activeProfileId: replaceRemovedRoute(settings.activeProfileId),
+		workspaceRouting: {
+			galleryProfileId: replaceRemovedRoute(settings.workspaceRouting.galleryProfileId),
+			agentProfileId: replaceRemovedRoute(settings.workspaceRouting.agentProfileId),
+			agentImageProfileId:
+				settings.workspaceRouting.agentImageProfileId === profileId
+					? null
+					: settings.workspaceRouting.agentImageProfileId
+		}
 	};
 }
 
@@ -404,7 +457,7 @@ export function serializeSettingsForExport(settings: AppSettings, includeApiKeys
 
 export function buildExportedSettings(settings: AppSettings, includeApiKeys: boolean): ExportedSettings {
 	return {
-		version: 1,
+		version: 2,
 		settings: serializeSettingsForExport(settings, includeApiKeys)
 	};
 }
@@ -449,7 +502,14 @@ export function getDefaultImageApiProtocol(provider: ApiProvider, apiMode: ApiMo
 }
 
 export function getAvailableImageApiProtocols(provider: ApiProvider): ImageApiProtocol[] {
-	if (provider === 'google') return ['gemini-interactions', 'openai-images'];
+	if (provider === 'google') {
+		return [
+			'gemini-interactions',
+			'gemini-generate-content',
+			'gemini-generate-content-response-format',
+			'openai-images'
+		];
+	}
 	if (provider === 'xai') return ['xai-imagine', 'openai-images'];
 	if (provider === 'openai') return ['openai-images', 'openai-responses'];
 	return ['custom'];
@@ -460,6 +520,8 @@ export function getImageApiProtocolLabel(protocol: ImageApiProtocol): string {
 	if (protocol === 'openai-responses') return 'OpenAI Responses';
 	if (protocol === 'xai-imagine') return 'xAI Imagine Images';
 	if (protocol === 'gemini-interactions') return 'Gemini Interactions';
+	if (protocol === 'gemini-generate-content') return 'Gemini generateContent';
+	if (protocol === 'gemini-generate-content-response-format') return 'Gemini generateContent（responseFormat）';
 	return '自定义 Manifest';
 }
 
@@ -507,6 +569,10 @@ export function normalizeAgentMaxToolRounds(value: unknown): number {
 	return Number.isFinite(numeric) ? Math.min(50, Math.max(1, Math.trunc(numeric))) : DEFAULT_AGENT_MAX_TOOL_ROUNDS;
 }
 
+export function normalizeAgentImageRoutingStrategy(value: unknown): AgentImageRoutingStrategy {
+	return value === 'native' || value === 'profile' ? value : 'auto';
+}
+
 export function normalizeZipDownloadRoutes(value: unknown): ZipDownloadRoute[] {
 	const allowed: ZipDownloadRoute[] = [
 		'task-card',
@@ -519,6 +585,26 @@ export function normalizeZipDownloadRoutes(value: unknown): ZipDownloadRoute[] {
 	if (!Array.isArray(value)) return [...DEFAULT_ZIP_DOWNLOAD_ROUTES];
 	const result = value.filter((item): item is ZipDownloadRoute => allowed.includes(item as ZipDownloadRoute));
 	return [...new Set(result)];
+}
+
+function normalizeWorkspaceRouting(
+	value: unknown,
+	profiles: ApiProfile[],
+	fallbackProfileId: string
+): WorkspaceApiRouting {
+	const record = isRecord(value) ? value : {};
+	const validIds = new Set(profiles.map((profile) => profile.id));
+	const resolve = (candidate: unknown) => {
+		const id = getString(candidate, fallbackProfileId);
+		return validIds.has(id) ? id : fallbackProfileId;
+	};
+	const requestedAgentImageProfileId = getNullableString(record.agentImageProfileId);
+	return {
+		galleryProfileId: resolve(record.galleryProfileId),
+		agentProfileId: resolve(record.agentProfileId),
+		agentImageProfileId:
+			requestedAgentImageProfileId && validIds.has(requestedAgentImageProfileId) ? requestedAgentImageProfileId : null
+	};
 }
 
 function normalizeProfile(value: unknown, customProviderIds = new Set<string>()): ApiProfile | null {

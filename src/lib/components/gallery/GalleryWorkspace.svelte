@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { createRunningTask, type RunningTaskInput } from '$lib/domain/task-factory';
+	import { buildActualParamsByImage, buildRevisedPromptByImage } from '$lib/domain/task-output';
 	import {
 		Download,
 		Heart,
@@ -19,11 +21,16 @@
 	import {
 		createAgentAssistantFallbackText,
 		getAgentRequestBlockReason,
+		hasMeaningfulAgentResponse,
+		type AgentImageToolStart,
+		type AgentPartialImage,
 		type AgentResponsesResult
 	} from '$lib/api/agent-runtime';
 	import { runAgentResponsesRequest } from '$lib/api/agent-runner';
+	import { createGalleryTaskController, type GalleryTaskInput } from '$lib/api/gallery-task-controller';
 	import { runGalleryImageRequestGroup } from '$lib/api/gallery-runner';
 	import {
+		attachAgentOutputTask,
 		completeAgentRound,
 		createAgentConversation,
 		createAgentUserRound,
@@ -31,10 +38,12 @@
 		normalizeAgentConversations,
 		startAgentAssistantMessage,
 		updateAgentAssistantMessage,
-		type AgentConversation
+		type AgentConversation,
+		type AgentExecutionRoute,
+		type AgentRoundIntent
 	} from '$lib/domain/agent';
+	import { detectAgentRoundIntent, resolveAgentExecutionRoute } from '$lib/domain/agent-routing';
 	import {
-		createEmptyTaskMetadata,
 		DEFAULT_PARAMS,
 		getConcreteOutputImageCount,
 		getMissingOutputImageCount,
@@ -87,8 +96,7 @@
 	import { createZipBlob } from '$lib/domain/zip';
 	import { copyImageToClipboard } from '$lib/storage/image-clipboard';
 	import {
-		DEFAULT_SETTINGS,
-		getActiveProfile,
+		getWorkspaceProfile,
 		getProfileRequestBlockReason,
 		getTaskReuseProfile,
 		normalizeSettings,
@@ -110,24 +118,23 @@
 		nativeMultipartRequest,
 		nativeMultipartStreamRequest
 	} from '$lib/tauri/http-client';
-	import {
-		deleteStoredInputDraft,
-		loadStoredInputDraft,
-		loadStoredSettings,
-		saveStoredInputDraft,
-		saveStoredSettings
-	} from '$lib/storage/app-store';
+	import { deleteStoredInputDraft, loadStoredInputDraft, saveStoredInputDraft } from '$lib/storage/app-store';
 	import {
 		cleanupUnreferencedTaskImageFiles,
 		deleteTaskImageFiles,
 		deleteStoredTasks,
 		loadStoredAgentConversations,
 		loadStoredTasksPage,
+		loadStoredTasks,
+		loadStoredTask,
 		saveStoredAgentConversations,
 		saveStoredTask,
 		saveStoredTasks
 	} from '$lib/storage/gallery-db';
 	import { deleteTaskImageFilesWithReport } from '$lib/storage/task-file-cleanup';
+	import { getTaskOutputCount, getTaskPartialCount } from '$lib/domain/task-media';
+	import { createTaskMediaController } from '$lib/storage/task-media-controller';
+	import { canUseTauriPlugins } from '$lib/storage/runtime';
 	import { createTaskPersistenceController } from '$lib/storage/task-persistence';
 	import { saveBlobToFile, saveDataUrlToFile } from '$lib/storage/native-download';
 	import AgentWorkspace from './AgentWorkspace.svelte';
@@ -148,13 +155,13 @@
 	import TaskDetailModal from './TaskDetailModal.svelte';
 	import TaskSelectionBar from './TaskSelectionBar.svelte';
 
-	const SETTINGS_STORAGE_KEY = 'imageport.gallery.settings';
 	const INPUT_DRAFT_STORAGE_KEY = 'imageport.gallery.inputDraft';
 	const TASKS_STORAGE_KEY = 'imageport.gallery.tasks';
 	const AGENT_STORAGE_KEY = 'imageport.agent.conversations';
 	const TASK_GRID_SKELETON_ITEMS = Array.from({ length: 8 }, (_, index) => index);
 
-	let settings = $state<AppSettings>(DEFAULT_SETTINGS);
+	let { settings = $bindable() }: { settings: AppSettings } = $props();
+
 	let appMode = $state<'gallery' | 'agent'>('gallery');
 	let prompt = $state('');
 	let agentPrompt = $state('');
@@ -198,7 +205,6 @@
 	let lightboxIndex = $state(0);
 	let lightboxTitle = $state('图片预览');
 	let lightboxTaskId = $state<string | null>(null);
-	let hasHydratedSettings = $state(false);
 	let hasHydratedInputDraft = $state(false);
 	let hasHydratedTasks = $state(false);
 	let taskHydrationFailed = $state(false);
@@ -213,6 +219,50 @@
 		onError(message) {
 			error = message;
 			toast.error('任务保存失败', { description: message });
+		}
+	});
+
+	const taskMedia = createTaskMediaController({
+		getTasks: () => tasks,
+		loadTask: loadStoredTask,
+		loadAllPreviews: () => (canUseTauriPlugins() ? loadStoredTasks('preview') : Promise.resolve(tasks)),
+		onError(message) {
+			error = message;
+			toast.error('图片读取失败', { description: message });
+		}
+	});
+
+	const galleryTasks = createGalleryTaskController({
+		getTask: (id) => tasks.find((task) => task.id === id),
+		updateTask(id, update) {
+			tasks = updateTaskById(tasks, id, update);
+		},
+		persistTask: (task) => taskPersistence.persistTaskSnapshotNow(task),
+		persistPartial: (id) => taskPersistence.persistTaskSnapshotSoon(id),
+		createRequestId: createGalleryRequestId,
+		releaseRequests: releaseGalleryTaskRequests,
+		cancelRequests: cancelGalleryTaskRequests,
+		runRequest: (input) =>
+			runGalleryImageRequestGroup({
+				...input,
+				nativeJsonRequest,
+				nativeMultipartRequest,
+				nativeJsonStreamRequest,
+				nativeMultipartStreamRequest,
+				downloadImageAsDataUrl
+			}),
+		onComplete(result, input) {
+			if (result.status === 'done')
+				toast.success('生成完成', { description: formatActualImageCount(result.images.length, input.params.n) });
+			else
+				toast.warning('部分生成完成', {
+					description: `${formatActualImageCount(result.images.length, input.params.n)}，${result.failureCount} 个请求失败`
+				});
+			notifyTaskCompleted(input.prompt, result.images.length, input.params.n);
+		},
+		onError(message) {
+			error = message;
+			toast.error('生成失败', { description: message });
 		}
 	});
 
@@ -246,31 +296,52 @@
 	let activeFavoriteDownloadableTasks = $derived(
 		activeFavoriteCollectionId
 			? filteredTasks.filter(
-					(task) => task.status !== 'running' && (task.images.length > 0 || task.streamPartialImageIds.length > 0)
+					(task) => task.status !== 'running' && (getTaskOutputCount(task) > 0 || getTaskPartialCount(task) > 0)
 				)
 			: []
 	);
 	let selectedTask = $derived(tasks.find((task) => task.id === selectedTaskId) ?? null);
 	let lightboxTask = $derived(tasks.find((task) => task.id === lightboxTaskId) ?? null);
 	let maskEditorImage = $derived(inputImages.find((image) => image.id === maskEditorImageId) ?? null);
-	let activeProfile = $derived(getActiveProfile(settings));
+	let galleryProfile = $derived(getWorkspaceProfile(settings, 'gallery'));
+	let agentProfile = $derived(getWorkspaceProfile(settings, 'agent'));
+	let agentImageProfile = $derived(getWorkspaceProfile(settings, 'agent-image'));
+	let agentDraftIntent = $derived(detectAgentRoundIntent(agentPrompt, inputImages, mask));
+	let agentDraftExecutionRoute = $derived(
+		resolveAgentExecutionRoute({
+			intent: agentDraftIntent,
+			strategy: settings.agentImageRoutingStrategy,
+			agentBaseUrl: agentProfile.baseUrl
+		})
+	);
+	let agentExecutionProfile = $derived(agentDraftExecutionRoute === 'image-profile' ? agentImageProfile : agentProfile);
 	let effectiveGalleryProfile = $derived(
 		nextGalleryProfileOverrideId
-			? (settings.profiles.find((profile) => profile.id === nextGalleryProfileOverrideId) ?? activeProfile)
-			: activeProfile
+			? (settings.profiles.find((profile) => profile.id === nextGalleryProfileOverrideId) ?? galleryProfile)
+			: galleryProfile
 	);
-	let composerProfile = $derived(appMode === 'agent' ? activeProfile : effectiveGalleryProfile);
+	let composerProfile = $derived(appMode === 'agent' ? agentExecutionProfile : effectiveGalleryProfile);
 	let composerCapabilities = $derived(getProviderCapabilities(composerProfile, settings));
 	let profileBlockReason = $derived(
 		getProfileRequestBlockReason(effectiveGalleryProfile, settings) ??
 			getProviderInputValidationMessage(composerCapabilities, inputImages.length, Boolean(mask))
 	);
-	let agentBlockReason = $derived(getAgentRequestBlockReason(activeProfile, settings));
+	let agentBlockReason = $derived(
+		agentDraftExecutionRoute === 'image-profile'
+			? getAgentImageProfileBlockReason(agentImageProfile, inputImages, mask)
+			: getAgentRequestBlockReason(agentProfile, settings)
+	);
 	let activeParams = $derived(
-		normalizeParamsForRequest(params, appMode === 'agent' ? activeProfile : effectiveGalleryProfile, appMode)
+		normalizeParamsForRequest(
+			params,
+			appMode === 'agent' ? agentExecutionProfile : effectiveGalleryProfile,
+			appMode === 'agent' && agentDraftExecutionRoute === 'image-profile' ? 'gallery' : appMode
+		)
 	);
 	let canSubmit = $derived(Boolean(prompt.trim()) && !profileBlockReason);
-	let canSubmitAgent = $derived(Boolean(agentPrompt.trim()) && !agentBlockReason);
+	let canSubmitAgent = $derived(
+		Boolean(agentPrompt.trim()) && (agentDraftExecutionRoute === 'image-profile' || !agentBlockReason)
+	);
 	let tasksStorageBytes = $state<number | null>(null);
 	let storageBytesRefreshTimer: number | null = null;
 	let storageBytesRefreshFrame: number | null = null;
@@ -302,8 +373,8 @@
 	$effect(() => {
 		const nextParams = normalizeParamsForRequest(
 			params,
-			appMode === 'agent' ? activeProfile : effectiveGalleryProfile,
-			appMode
+			appMode === 'agent' ? agentExecutionProfile : effectiveGalleryProfile,
+			appMode === 'agent' && agentDraftExecutionRoute === 'image-profile' ? 'gallery' : appMode
 		);
 		if (nextParams.n !== params.n) params = nextParams;
 	});
@@ -337,23 +408,16 @@
 			mounted = false;
 			window.clearInterval(timer);
 			cancelTasksStorageBytesRefresh();
+			galleryTasks.dispose();
+			cancelGalleryTaskRequests(Object.keys(activeGalleryRequestIds));
+			for (const requestId of Object.values(activeAgentRequestIds))
+				void cancelNativeRequest(requestId).catch(() => undefined);
 			taskPersistence.dispose();
 		};
 	});
 
 	async function hydrateStorage(isMounted: () => boolean) {
-		try {
-			const saved = (await loadStoredSettings()) ?? readLocalStorageJson(localStorage, SETTINGS_STORAGE_KEY);
-			if (saved) {
-				const nextSettings = normalizeSettings(saved);
-				if (isMounted()) settings = nextSettings;
-				void saveStoredSettings(nextSettings);
-			}
-		} catch {
-			// Settings persistence is best-effort.
-		} finally {
-			if (isMounted()) hasHydratedSettings = true;
-		}
+		let draftHydrated = false;
 		try {
 			const savedDraft = (await loadStoredInputDraft()) ?? readLocalStorageJson(localStorage, INPUT_DRAFT_STORAGE_KEY);
 			if (savedDraft && isMounted()) {
@@ -366,10 +430,11 @@
 					void saveStoredInputDraft({ prompt, params, inputImages, mask });
 				}
 			}
-		} catch {
-			// Input draft persistence is best-effort.
+			draftHydrated = true;
+		} catch (err) {
+			toast.warning('草稿读取失败，已暂停自动保存', { description: err instanceof Error ? err.message : String(err) });
 		} finally {
-			if (isMounted()) hasHydratedInputDraft = true;
+			if (isMounted()) hasHydratedInputDraft = draftHydrated;
 		}
 		let tasksHydrated = false;
 		try {
@@ -414,17 +479,13 @@
 			if (isMounted()) {
 				agentConversations = [createAgentConversation()];
 				activeAgentConversationId = agentConversations[0]?.id ?? null;
-				hasHydratedAgentConversations = true;
-				toast.warning('Agent 会话读取失败', { description: err instanceof Error ? err.message : String(err) });
+				hasHydratedAgentConversations = false;
+				toast.warning('Agent 会话读取失败，已暂停自动保存', {
+					description: err instanceof Error ? err.message : String(err)
+				});
 			}
 		}
 	}
-
-	$effect(() => {
-		if (!hasHydratedSettings) return;
-		localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-		void saveStoredSettings(settings);
-	});
 
 	$effect(() => {
 		if (!hasHydratedInputDraft) return;
@@ -435,13 +496,17 @@
 		}
 		const draft = { prompt, params, inputImages, mask };
 		localStorage.setItem(INPUT_DRAFT_STORAGE_KEY, JSON.stringify(draft));
-		void saveStoredInputDraft(draft);
+		void saveStoredInputDraft(draft).catch((error) => {
+			toast.error('草稿保存失败', { description: error instanceof Error ? error.message : String(error) });
+		});
 	});
 
 	$effect(() => {
 		if (!hasHydratedAgentConversations) return;
 		localStorage.setItem(AGENT_STORAGE_KEY, JSON.stringify(agentConversations));
-		void saveStoredAgentConversations(agentConversations);
+		void saveStoredAgentConversations(agentConversations).catch((error) => {
+			toast.error('Agent 会话保存失败', { description: error instanceof Error ? error.message : String(error) });
+		});
 	});
 
 	$effect(() => {
@@ -534,7 +599,7 @@
 			toast.warning('请输入 Agent 消息');
 			return;
 		}
-		if (agentBlockReason) {
+		if (agentBlockReason && agentDraftExecutionRoute !== 'image-profile') {
 			toast.warning('当前 Agent 配置不可用', { description: agentBlockReason });
 			openSettings();
 			return;
@@ -556,6 +621,18 @@
 		retryOfRoundId?: string | null;
 		continuedFromRoundId?: string | null;
 	}) {
+		const intent = detectAgentRoundIntent(input.prompt, input.inputImages, input.mask);
+		const executionRoute = resolveAgentExecutionRoute({
+			intent,
+			strategy: settings.agentImageRoutingStrategy,
+			agentBaseUrl: agentProfile.baseUrl
+		});
+		const executionProfile = executionRoute === 'image-profile' ? agentImageProfile : agentProfile;
+		const executionParams = normalizeParamsForRequest(
+			input.params,
+			executionProfile,
+			executionRoute === 'image-profile' ? 'gallery' : 'agent'
+		);
 		const conversation = activeAgentConversation ?? createAgentConversation();
 		const startedConversation = createAgentUserRound(conversation, {
 			prompt: input.prompt,
@@ -564,113 +641,241 @@
 			maxToolRounds: settings.agentMaxToolRounds,
 			webSearchEnabled: settings.agentWebSearch,
 			retryOfRoundId: input.retryOfRoundId ?? null,
-			continuedFromRoundId: input.continuedFromRoundId ?? null
+			continuedFromRoundId: input.continuedFromRoundId ?? null,
+			intent,
+			executionRoute,
+			imageProfileId: executionRoute === 'image-profile' ? executionProfile.id : null
 		});
 		const round = startedConversation.rounds.at(-1);
 		if (!round) return;
-		const taskId = crypto.randomUUID();
 		const withAssistant = startAgentAssistantMessage(startedConversation, round.id, {
-			content: '正在思考并调用图片工具...'
+			content: executionRoute === 'image-profile' ? '正在生成图片...' : '正在思考...'
 		});
 		agentConversations = upsertAgentConversation(agentConversations, withAssistant);
 		activeAgentConversationId = withAssistant.id;
-		const nextTasks = createRunningTaskSnapshot({
-			taskId,
-			taskPrompt: input.prompt,
-			taskParams: input.params,
-			taskInputImages: input.inputImages,
-			taskMask: input.mask,
-			sourceMode: 'agent',
-			profile: activeProfile,
-			agentConversationId: withAssistant.id,
-			agentRoundId: round.id,
-			agentMessageId: round.userMessageId,
-			agentToolAction: input.inputImages.length ? 'edit' : 'generate'
-		});
-		tasks = nextTasks;
-		noteStoredTasksAdded(1);
-		if (nextTasks[0]) await taskPersistence.persistTaskSnapshotNow(nextTasks[0]);
-		toast.info('Agent 轮次已开始', { description: `预计生成 ${formatExpectedImageCount(input.params.n)}` });
-		void runAgentResponsesRound({
+		const executionInput: AgentRoundExecutionInput = {
 			conversationId: withAssistant.id,
 			roundId: round.id,
-			taskId,
-			profile: activeProfile,
+			profile: executionProfile,
 			settings,
 			prompt: input.prompt,
-			params: input.params,
+			params: executionParams,
 			inputImages: input.inputImages,
-			mask: input.mask
-		});
-	}
-
-	function createRunningTaskSnapshot(input: {
-		taskId: string;
-		taskPrompt: string;
-		taskParams: TaskParams;
-		taskInputImages: InputImage[];
-		taskMask: MaskDraft | null;
-		sourceMode: 'gallery' | 'agent';
-		profile: ApiProfile;
-		agentConversationId?: string;
-		agentRoundId?: string;
-		agentMessageId?: string;
-		agentToolAction?: string;
-	}) {
-		const createdAt = Date.now();
-		const task: TaskRecord = {
-			id: input.taskId,
-			prompt: input.taskPrompt,
-			params: input.taskParams,
-			inputImages: input.taskInputImages,
-			mask: input.taskMask,
-			images: [],
-			status: 'running',
-			error: null,
-			createdAt,
-			finishedAt: null,
-			failureCount: 0,
-			...createEmptyTaskMetadata(),
-			apiProfileId: input.profile.id,
-			apiProfileName: input.profile.name,
-			apiProvider: input.profile.provider,
-			apiMode: input.profile.apiMode,
-			apiProtocol: input.profile.apiProtocol,
-			model: input.profile.model,
-			sourceMode: input.sourceMode,
-			agentConversationId: input.agentConversationId ?? null,
-			agentRoundId: input.agentRoundId ?? null,
-			agentMessageId: input.agentMessageId ?? null,
-			agentToolAction: input.agentToolAction ?? null
+			mask: input.mask,
+			intent,
+			executionRoute
 		};
-		return [task, ...tasks];
+		if (executionRoute === 'image-profile') {
+			const imageProfileBlockReason = getAgentImageProfileBlockReason(executionProfile, input.inputImages, input.mask);
+			if (imageProfileBlockReason) {
+				completeAgentImageProfileActionRequired(executionInput, imageProfileBlockReason);
+				return;
+			}
+			toast.info('Agent 正在生成图片', { description: executionProfile.model });
+			void runAgentImageProfileRound(executionInput);
+			return;
+		}
+		toast.info('Agent 正在处理');
+		void runAgentResponsesRound(executionInput);
 	}
 
-	async function runTaskGeneration(
+	function createRunningTaskSnapshot(input: RunningTaskInput) {
+		return [createRunningTask(input), ...tasks];
+	}
+
+	function runTaskGeneration(
 		taskId: string,
-		requestInput: {
-			settings: AppSettings;
-			profile: ApiProfile;
-			baseUrl: string;
-			apiKey: string;
-			model: string;
-			timeoutSecs: number;
-			responseFormatB64Json: boolean;
-			prompt: string;
-			params: TaskParams;
-		},
+		requestInput: Pick<GalleryTaskInput, 'settings' | 'profile' | 'prompt' | 'params'>,
 		taskInputImages: InputImage[],
 		taskMask: MaskDraft | null
 	) {
+		return galleryTasks.run({ taskId, ...requestInput, inputImages: taskInputImages, mask: taskMask });
+	}
+
+	type AgentRoundExecutionInput = {
+		conversationId: string;
+		roundId: string;
+		profile: ApiProfile;
+		settings: AppSettings;
+		prompt: string;
+		params: TaskParams;
+		inputImages: InputImage[];
+		mask: MaskDraft | null;
+		intent: AgentRoundIntent;
+		executionRoute: AgentExecutionRoute;
+	};
+
+	function ensureAgentImageTask(
+		input: AgentRoundExecutionInput,
+		imageTool: AgentImageToolStart,
+		taskParams: TaskParams = { ...input.params, n: 1 }
+	) {
+		const existingTask = tasks.find(
+			(task) => task.agentRoundId === input.roundId && task.agentToolCallId === imageTool.toolCallId
+		);
+		if (existingTask) return existingTask.id;
+		const conversation = getAgentConversation(input.conversationId);
+		const round = conversation?.rounds.find((item) => item.id === input.roundId);
+		if (!conversation || !round) return null;
+
+		const taskId = crypto.randomUUID();
+		const nextTasks = createRunningTaskSnapshot({
+			taskId,
+			taskPrompt: imageTool.prompt?.trim() || input.prompt,
+			taskParams,
+			taskInputImages: input.inputImages,
+			taskMask: input.mask,
+			sourceMode: 'agent',
+			profile: input.profile,
+			agentConversationId: input.conversationId,
+			agentRoundId: input.roundId,
+			agentMessageId: round.assistantMessageId ?? round.userMessageId,
+			agentToolCallId: imageTool.toolCallId,
+			agentToolAction: imageTool.action ?? (input.inputImages.length ? 'edit' : 'auto')
+		});
+		tasks = nextTasks;
+		noteStoredTasksAdded(1);
+		taskPersistence.persistTaskSnapshotSoon(taskId);
+		agentConversations = upsertAgentConversation(
+			agentConversations,
+			attachAgentOutputTask(conversation, input.roundId, taskId)
+		);
+		return taskId;
+	}
+
+	function updateAgentTaskPartialImage(input: AgentRoundExecutionInput, partialImage: AgentPartialImage) {
+		const taskId = ensureAgentImageTask(input, { toolCallId: partialImage.toolCallId });
+		if (!taskId) return;
+		const task = tasks.find((item) => item.id === taskId);
+		if (!task) return;
+		const nextTasks = applyTaskPartialImages(tasks, taskId, [...task.streamPartialImageIds, partialImage.dataUrl]);
+		tasks = nextTasks;
+		taskPersistence.persistTaskSnapshotSoon(taskId);
+	}
+
+	async function commitAgentImageTasks(input: AgentRoundExecutionInput, result: AgentResponsesResult) {
+		const imageCalls = result.toolCalls.filter(
+			(toolCall): toolCall is typeof toolCall & { id: string } =>
+				toolCall.type === 'image_generation_call' && Boolean(toolCall.id)
+		);
+		for (const toolCall of imageCalls) {
+			ensureAgentImageTask(input, { toolCallId: toolCall.id });
+		}
+		for (const partialImage of result.partialImages) {
+			ensureAgentImageTask(input, { toolCallId: partialImage.toolCallId });
+		}
+		for (const image of result.images) {
+			ensureAgentImageTask(input, {
+				toolCallId: image.toolCallId,
+				action: image.action,
+				prompt: image.revisedPrompt
+			});
+		}
+
+		const imageByToolCallId = new Map(result.images.map((image) => [image.toolCallId, image]));
+		const partialImagesByToolCallId = new Map<string, string[]>();
+		for (const partialImage of result.partialImages) {
+			const existing = partialImagesByToolCallId.get(partialImage.toolCallId) ?? [];
+			existing.push(partialImage.dataUrl);
+			partialImagesByToolCallId.set(partialImage.toolCallId, existing);
+		}
+		const toolCallById = new Map(imageCalls.map((toolCall) => [toolCall.id, toolCall]));
+		const finishedAt = Date.now();
+		const taskIds = tasks
+			.filter((task) => task.agentConversationId === input.conversationId && task.agentRoundId === input.roundId)
+			.map((task) => task.id);
+
+		for (const taskId of taskIds) {
+			const task = tasks.find((item) => item.id === taskId);
+			if (!task?.agentToolCallId) continue;
+			const image = imageByToolCallId.get(task.agentToolCallId);
+			const partialImages = partialImagesByToolCallId.get(task.agentToolCallId) ?? task.streamPartialImageIds;
+			const toolCall = toolCallById.get(task.agentToolCallId);
+			const actualParamsByImage: Record<string, Partial<TaskParams>> = image?.actualParams
+				? { '0': image.actualParams }
+				: {};
+			const revisedPromptByImage: Record<string, string> = image?.revisedPrompt ? { '0': image.revisedPrompt } : {};
+			const nextTasks = updateTaskById(tasks, taskId, (current) => ({
+				...current,
+				prompt: image?.revisedPrompt?.trim() || current.prompt,
+				images: image ? [image.dataUrl] : [],
+				status: image ? 'done' : partialImages.length ? 'partial' : 'error',
+				error: image
+					? null
+					: partialImages.length
+						? null
+						: toolCall?.status === 'failed'
+							? '图片工具调用失败'
+							: '图片工具没有返回最终图片',
+				failureCount: image ? 0 : 1,
+				finishedAt,
+				actualParams: image?.actualParams ?? null,
+				actualParamsByImage,
+				revisedPromptByImage,
+				streamPartialImageIds: partialImages,
+				agentToolAction: image?.action ?? current.agentToolAction
+			}));
+			tasks = nextTasks;
+		}
+
+		const completedTasks = tasks.filter((task) => taskIds.includes(task.id));
+		await Promise.all(completedTasks.map((task) => taskPersistence.persistTaskSnapshotNow(task)));
+		return {
+			taskIds,
+			imageCount: completedTasks.reduce((count, task) => count + task.images.length, 0),
+			partialTaskCount: completedTasks.filter((task) => task.status === 'partial').length,
+			failedTaskCount: completedTasks.filter((task) => task.status === 'error').length
+		};
+	}
+
+	function completeAgentImageProfileActionRequired(input: AgentRoundExecutionInput, reason: string) {
+		const conversation = getAgentConversation(input.conversationId);
+		if (!conversation) return;
+		agentConversations = upsertAgentConversation(
+			agentConversations,
+			completeAgentRound(conversation, input.roundId, {
+				content: `当前 Agent 模型无法直接生成图片，请配置图片执行 Profile 后重试。\n\n${reason}`,
+				status: 'needs-action',
+				error: null,
+				maxToolRounds: input.settings.agentMaxToolRounds,
+				webSearchEnabled: input.settings.agentWebSearch,
+				intent: input.intent,
+				executionRoute: input.executionRoute,
+				imageProfileId: input.profile.id
+			})
+		);
+		toast.warning('需要配置图片执行 Profile', { description: reason });
+	}
+
+	async function runAgentImageProfileRound(input: AgentRoundExecutionInput, priorResult?: AgentResponsesResult) {
+		const toolCallId = `image-profile-${input.roundId}`;
+		const taskParams = normalizeParamsForRequest(input.params, input.profile, 'gallery');
+		const toolCall = {
+			id: toolCallId,
+			type: 'image_profile_call',
+			status: 'in_progress',
+			title: `${input.profile.name} · ${input.profile.model}`
+		};
+		const taskId = ensureAgentImageTask(
+			{ ...input, params: taskParams },
+			{
+				toolCallId,
+				action: input.intent === 'image-edit' ? 'edit' : 'generate',
+				prompt: input.prompt
+			},
+			taskParams
+		);
+		if (!taskId) return;
+
 		try {
 			const result = await runGalleryImageRequestGroup({
 				taskId,
-				settings: requestInput.settings,
-				profile: requestInput.profile,
-				prompt: requestInput.prompt,
-				params: requestInput.params,
-				inputImages: taskInputImages,
-				mask: taskMask,
+				settings: input.settings,
+				profile: input.profile,
+				prompt: input.prompt,
+				params: taskParams,
+				inputImages: input.inputImages,
+				mask: input.mask,
 				nativeJsonRequest,
 				nativeMultipartRequest,
 				nativeJsonStreamRequest,
@@ -678,9 +883,10 @@
 				downloadImageAsDataUrl,
 				createRequestId: () => createGalleryRequestId(taskId),
 				onPartialImages: updateTaskPartialImages,
-				isCanceled: () => !hasTask(taskId)
+				isCanceled: () => isAgentRoundCanceled(input.roundId) || !hasTask(taskId)
 			});
-			if (!hasTask(taskId)) return;
+			if (isAgentRoundCanceled(input.roundId) || !hasTask(taskId)) return;
+
 			const nextTasks = updateTaskById(tasks, taskId, (task) => ({
 				...task,
 				images: result.images,
@@ -698,53 +904,105 @@
 			tasks = nextTasks;
 			const updatedTask = nextTasks.find((task) => task.id === taskId);
 			if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
-			if (result.status === 'done') {
-				toast.success('生成完成', { description: formatActualImageCount(result.images.length, requestInput.params.n) });
+
+			const conversation = getAgentConversation(input.conversationId);
+			if (conversation) {
+				const roundTaskIds = tasks.filter((task) => task.agentRoundId === input.roundId).map((task) => task.id);
+				const content =
+					result.status === 'partial'
+						? `${formatActualImageCount(result.images.length, taskParams.n)}，部分请求未完成。`
+						: `${formatActualImageCount(result.images.length, taskParams.n)}。`;
+				agentConversations = upsertAgentConversation(
+					agentConversations,
+					completeAgentRound(conversation, input.roundId, {
+						content,
+						outputTaskIds: roundTaskIds,
+						status: 'done',
+						error: null,
+						responseId: priorResult?.responseId ?? null,
+						rawResponsePayload: mergeAgentRawResponsePayload(
+							priorResult?.rawResponsePayload ?? null,
+							result.rawResponsePayload
+						),
+						toolCalls: [
+							...(priorResult?.toolCalls ?? []),
+							{ ...toolCall, status: result.status === 'done' ? 'completed' : 'partial' }
+						],
+						toolCallCount: (priorResult?.toolCallCount ?? 0) + 1,
+						maxToolRounds: input.settings.agentMaxToolRounds,
+						webSearchEnabled: input.settings.agentWebSearch,
+						intent: input.intent,
+						executionRoute: input.executionRoute,
+						imageProfileId: input.profile.id,
+						protocolWarning: getAgentProtocolWarning(priorResult)
+					})
+				);
+			}
+			if (result.status === 'partial') {
+				toast.warning('Agent 图片部分生成完成', {
+					description: formatActualImageCount(result.images.length, taskParams.n)
+				});
 			} else {
-				toast.warning('部分生成完成', {
-					description: `${formatActualImageCount(result.images.length, requestInput.params.n)}，${result.failureCount} 个请求失败`
+				toast.success('Agent 生成完成', {
+					description: formatActualImageCount(result.images.length, taskParams.n)
 				});
 			}
-			notifyTaskCompleted(requestInput.prompt, result.images.length, requestInput.params.n);
+			notifyAgentImagesCompleted(input.prompt, result.images.length);
 		} catch (err) {
-			if (!hasTask(taskId)) return;
+			if (isAgentRoundCanceled(input.roundId)) return;
 			const message = err instanceof Error ? err.message : String(err);
 			error = message;
-			toast.error('生成失败', { description: message });
-			const failedTask = tasks.find((task) => task.id === taskId);
-			const nextTasks = failedTask
-				? markTaskError(tasks, taskId, {
-						message,
-						finishedAt: Date.now(),
-						failureCount: getFailureCountForParams(failedTask.params.n, 0)
-					})
-				: tasks;
+			const nextTasks = updateTasksWhere(
+				tasks,
+				(task) => task.id === taskId && task.status === 'running',
+				(task) => ({
+					...task,
+					status: task.streamPartialImageIds.length ? 'partial' : 'error',
+					error: task.streamPartialImageIds.length ? null : message,
+					finishedAt: Date.now(),
+					failureCount: getFailureCountForParams(task.params.n, task.images.length)
+				})
+			);
 			tasks = nextTasks;
-			const updatedTask = nextTasks.find((task) => task.id === taskId);
-			if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
+			const roundTasks = nextTasks.filter((task) => task.agentRoundId === input.roundId);
+			await Promise.all(roundTasks.map((task) => taskPersistence.persistTaskSnapshotNow(task)));
+			const hasPartialImages = roundTasks.some((task) => task.streamPartialImageIds.length > 0);
+			const conversation = getAgentConversation(input.conversationId);
+			if (conversation) {
+				agentConversations = upsertAgentConversation(
+					agentConversations,
+					completeAgentRound(conversation, input.roundId, {
+						content: hasPartialImages ? '图片生成只返回了预览图，没有返回最终图片。' : `图片生成失败：${message}`,
+						outputTaskIds: roundTasks.map((task) => task.id),
+						status: hasPartialImages ? 'partial' : 'error',
+						error: hasPartialImages ? null : message,
+						responseId: priorResult?.responseId ?? null,
+						rawResponsePayload: priorResult?.rawResponsePayload ?? null,
+						toolCalls: [...(priorResult?.toolCalls ?? []), { ...toolCall, status: 'failed' }],
+						toolCallCount: (priorResult?.toolCallCount ?? 0) + 1,
+						maxToolRounds: input.settings.agentMaxToolRounds,
+						webSearchEnabled: input.settings.agentWebSearch,
+						intent: input.intent,
+						executionRoute: input.executionRoute,
+						imageProfileId: input.profile.id,
+						protocolWarning: getAgentProtocolWarning(priorResult)
+					})
+				);
+			}
+			toast.error('Agent 图片生成失败', { description: message });
 		} finally {
 			releaseGalleryTaskRequests(taskId);
 		}
 	}
 
-	async function runAgentResponsesRound(input: {
-		conversationId: string;
-		roundId: string;
-		taskId: string;
-		profile: ApiProfile;
-		settings: AppSettings;
-		prompt: string;
-		params: TaskParams;
-		inputImages: InputImage[];
-		mask: MaskDraft | null;
-	}) {
+	async function runAgentResponsesRound(input: AgentRoundExecutionInput) {
 		try {
 			const runningConversation = getAgentConversation(input.conversationId);
 			if (!runningConversation) throw new Error('Agent 会话不存在');
 			const result = await runAgentResponsesRequest({
 				conversation: runningConversation,
 				roundId: input.roundId,
-				taskId: input.taskId,
+				intent: input.intent,
 				profile: input.profile,
 				settings: input.settings,
 				prompt: input.prompt,
@@ -756,82 +1014,290 @@
 				createRequestId: () => `agent-${input.roundId}-${crypto.randomUUID()}`,
 				onActiveRequestId: (requestId) => setActiveAgentRequestId(input.roundId, requestId),
 				onText: updateAgentRoundText,
-				onPartialImages: updateTaskPartialImages,
+				onImageToolStarted: (imageTool) => {
+					ensureAgentImageTask(input, imageTool);
+				},
+				onPartialImage: (partialImage) => updateAgentTaskPartialImage(input, partialImage),
 				isCanceled: () => isAgentRoundCanceled(input.roundId)
 			});
 			if (isAgentRoundCanceled(input.roundId)) return;
-			const content = createAgentAssistantFallbackText(result, input.params.n);
-			const nextTasks = updateTaskById(tasks, input.taskId, (task) => ({
-				...task,
-				images: result.images,
-				status: result.images.length ? 'done' : result.partialImages.length ? 'partial' : 'error',
-				error: result.images.length || result.partialImages.length ? null : 'Agent 没有返回图片',
-				failureCount: getFailureCountForParams(input.params.n, result.images.length),
-				finishedAt: Date.now(),
-				actualParams: result.actualParams,
-				actualParamsByImage: buildActualParamsByImage(result.images, result.actualParamsList),
-				revisedPromptByImage: buildRevisedPromptByImage(result.images, result.revisedPrompts),
-				rawResponsePayload: result.rawResponsePayload,
-				streamPartialImageIds: result.partialImages
-			}));
-			tasks = nextTasks;
-			const updatedTask = nextTasks.find((task) => task.id === input.taskId);
-			if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
+			const imageOutcome = await commitAgentImageTasks(input, result);
+			const protocolWarning = getAgentProtocolWarning(result);
+
+			if (input.intent === 'conversation') {
+				if (!hasMeaningfulAgentResponse(result)) {
+					const message = result.unsupportedToolOutput
+						? '上游返回了不受支持的文本工具调用，已安全忽略。'
+						: 'Agent 返回了空响应';
+					const conversation = getAgentConversation(input.conversationId);
+					if (conversation) {
+						agentConversations = upsertAgentConversation(
+							agentConversations,
+							completeAgentRound(conversation, input.roundId, {
+								content: message,
+								outputTaskIds: imageOutcome.taskIds,
+								status: 'error',
+								error: message,
+								responseId: result.responseId,
+								rawResponsePayload: result.rawResponsePayload,
+								toolCalls: result.toolCalls,
+								toolCallCount: result.toolCallCount,
+								maxToolRounds: input.settings.agentMaxToolRounds,
+								webSearchEnabled: input.settings.agentWebSearch,
+								intent: input.intent,
+								executionRoute: input.executionRoute,
+								protocolWarning
+							})
+						);
+					}
+					toast.error('Agent 响应无效', { description: message });
+					return;
+				}
+
+				const content = createAgentAssistantFallbackText(result, input.params.n);
+				const completedConversation = getAgentConversation(input.conversationId);
+				if (completedConversation) {
+					agentConversations = upsertAgentConversation(
+						agentConversations,
+						completeAgentRound(completedConversation, input.roundId, {
+							content,
+							outputTaskIds: imageOutcome.taskIds,
+							status: 'done',
+							error: null,
+							responseId: result.responseId,
+							rawResponsePayload: result.rawResponsePayload,
+							toolCalls: result.toolCalls,
+							toolCallCount: result.toolCallCount,
+							maxToolRounds: input.settings.agentMaxToolRounds,
+							webSearchEnabled: input.settings.agentWebSearch,
+							intent: input.intent,
+							executionRoute: input.executionRoute,
+							protocolWarning
+						})
+					);
+				}
+				if (imageOutcome.imageCount) {
+					toast.success('Agent 生成完成', { description: `已生成 ${imageOutcome.imageCount} 张图片` });
+					notifyAgentImagesCompleted(input.prompt, imageOutcome.imageCount);
+				} else {
+					toast.success('Agent 已回复');
+				}
+				return;
+			}
+
+			if (imageOutcome.imageCount > 0) {
+				const content = createAgentAssistantFallbackText(result, input.params.n);
+				const completedConversation = getAgentConversation(input.conversationId);
+				if (completedConversation) {
+					agentConversations = upsertAgentConversation(
+						agentConversations,
+						completeAgentRound(completedConversation, input.roundId, {
+							content,
+							outputTaskIds: imageOutcome.taskIds,
+							status: 'done',
+							error: null,
+							responseId: result.responseId,
+							rawResponsePayload: result.rawResponsePayload,
+							toolCalls: result.toolCalls,
+							toolCallCount: result.toolCallCount,
+							maxToolRounds: input.settings.agentMaxToolRounds,
+							webSearchEnabled: input.settings.agentWebSearch,
+							intent: input.intent,
+							executionRoute: input.executionRoute,
+							protocolWarning
+						})
+					);
+				}
+				toast.success('Agent 生成完成', { description: `已生成 ${imageOutcome.imageCount} 张图片` });
+				notifyAgentImagesCompleted(input.prompt, imageOutcome.imageCount);
+				return;
+			}
+
+			if (input.executionRoute === 'native-image-tool' && input.settings.agentImageRoutingStrategy === 'auto') {
+				const fallbackProfile = getWorkspaceProfile(input.settings, 'agent-image');
+				const fallbackBlockReason = getAgentImageProfileBlockReason(
+					fallbackProfile,
+					input.inputImages,
+					input.mask,
+					input.settings
+				);
+				if (!fallbackBlockReason) {
+					toast.info('原生图片工具未返回最终图，正在切换图片 Profile', {
+						description: fallbackProfile.model
+					});
+					await runAgentImageProfileRound(
+						{
+							...input,
+							profile: fallbackProfile,
+							params: normalizeParamsForRequest(input.params, fallbackProfile, 'gallery')
+						},
+						result
+					);
+					return;
+				}
+
+				if (imageOutcome.partialTaskCount === 0) {
+					const conversation = getAgentConversation(input.conversationId);
+					if (conversation) {
+						agentConversations = upsertAgentConversation(
+							agentConversations,
+							completeAgentRound(conversation, input.roundId, {
+								content: `当前 Agent 模型无法直接生成图片，请配置图片执行 Profile 后重试。\n\n${fallbackBlockReason}`,
+								outputTaskIds: imageOutcome.taskIds,
+								status: 'needs-action',
+								error: null,
+								responseId: result.responseId,
+								rawResponsePayload: result.rawResponsePayload,
+								toolCalls: result.toolCalls,
+								toolCallCount: result.toolCallCount,
+								maxToolRounds: input.settings.agentMaxToolRounds,
+								webSearchEnabled: input.settings.agentWebSearch,
+								intent: input.intent,
+								executionRoute: input.executionRoute,
+								protocolWarning
+							})
+						);
+					}
+					toast.warning('Agent 没有返回最终图片', { description: fallbackBlockReason });
+					return;
+				}
+			}
+
+			const isPartial = imageOutcome.partialTaskCount > 0;
+			const noFinalImageMessage = isPartial
+				? '图片工具只返回了预览图，没有返回最终图片。'
+				: '图片请求没有返回最终图片，本轮未完成。';
+			const providerText = result.text.trim();
+			const content = providerText ? `${providerText}\n\n${noFinalImageMessage}` : noFinalImageMessage;
 			const completedConversation = getAgentConversation(input.conversationId);
 			if (completedConversation) {
 				agentConversations = upsertAgentConversation(
 					agentConversations,
 					completeAgentRound(completedConversation, input.roundId, {
 						content,
-						outputTaskIds: [input.taskId],
-						error: result.images.length || result.partialImages.length ? null : 'Agent 没有返回图片',
+						outputTaskIds: imageOutcome.taskIds,
+						status: isPartial ? 'partial' : 'error',
+						error: isPartial ? null : '图片请求没有返回最终图片',
 						responseId: result.responseId,
 						rawResponsePayload: result.rawResponsePayload,
 						toolCalls: result.toolCalls,
 						toolCallCount: result.toolCallCount,
 						maxToolRounds: input.settings.agentMaxToolRounds,
-						webSearchEnabled: input.settings.agentWebSearch
+						webSearchEnabled: input.settings.agentWebSearch,
+						intent: input.intent,
+						executionRoute: input.executionRoute,
+						protocolWarning
 					})
 				);
 			}
-			if (result.images.length) {
-				toast.success('Agent 生成完成', { description: formatActualImageCount(result.images.length, input.params.n) });
-			} else if (result.partialImages.length) {
-				toast.warning('Agent 只返回了 partial 图片', {
-					description: `${result.partialImages.length} 张 partial 已保留`
-				});
-			} else {
-				toast.error('Agent 没有返回图片');
-			}
-			notifyTaskCompleted(input.prompt, result.images.length, input.params.n);
+			toast.warning('Agent 没有返回最终图片', {
+				description: `${imageOutcome.partialTaskCount} 个预览结果，${imageOutcome.failedTaskCount} 个失败`
+			});
 		} catch (err) {
 			if (isAgentRoundCanceled(input.roundId)) return;
 			const message = err instanceof Error ? err.message : String(err);
-			error = message;
-			toast.error('Agent 失败', { description: message });
-			const nextTasks = updateTaskById(tasks, input.taskId, (task) => ({
-				...task,
-				status: task.streamPartialImageIds.length ? 'partial' : 'error',
-				error: message,
-				finishedAt: Date.now(),
-				failureCount: getFailureCountForParams(task.params.n, task.images.length)
-			}));
+			const nextTasks = updateTasksWhere(
+				tasks,
+				(task) => task.agentRoundId === input.roundId && task.status === 'running',
+				(task) => ({
+					...task,
+					status: task.streamPartialImageIds.length ? 'partial' : 'error',
+					error: task.streamPartialImageIds.length ? null : message,
+					finishedAt: Date.now(),
+					failureCount: 1
+				})
+			);
 			tasks = nextTasks;
-			const updatedTask = nextTasks.find((task) => task.id === input.taskId);
-			if (updatedTask) await taskPersistence.persistTaskSnapshotNow(updatedTask);
+			const roundTasks = nextTasks.filter((task) => task.agentRoundId === input.roundId);
+			await Promise.all(roundTasks.map((task) => taskPersistence.persistTaskSnapshotNow(task)));
+			const hasPartialImages =
+				input.intent !== 'conversation' && roundTasks.some((task) => task.streamPartialImageIds.length > 0);
+			const failedResponsesResult: AgentResponsesResult = {
+				responseId: null,
+				text: '',
+				unsupportedToolOutput: false,
+				images: [],
+				partialImages: [],
+				rawResponsePayload: null,
+				toolCalls: [{ id: null, type: 'responses_call', status: 'failed', title: message }],
+				toolCallCount: 1
+			};
+
+			if (
+				input.intent !== 'conversation' &&
+				input.executionRoute === 'native-image-tool' &&
+				input.settings.agentImageRoutingStrategy === 'auto'
+			) {
+				const fallbackProfile = getWorkspaceProfile(input.settings, 'agent-image');
+				const fallbackBlockReason = getAgentImageProfileBlockReason(
+					fallbackProfile,
+					input.inputImages,
+					input.mask,
+					input.settings
+				);
+				if (!fallbackBlockReason) {
+					toast.info('原生图片工具失败，正在切换图片 Profile', {
+						description: fallbackProfile.model
+					});
+					await runAgentImageProfileRound(
+						{
+							...input,
+							profile: fallbackProfile,
+							params: normalizeParamsForRequest(input.params, fallbackProfile, 'gallery')
+						},
+						failedResponsesResult
+					);
+					return;
+				}
+				if (!hasPartialImages) {
+					const conversation = getAgentConversation(input.conversationId);
+					if (conversation) {
+						agentConversations = upsertAgentConversation(
+							agentConversations,
+							completeAgentRound(conversation, input.roundId, {
+								content: `当前 Agent 模型无法直接生成图片，请配置图片执行 Profile 后重试。\n\n${fallbackBlockReason}`,
+								outputTaskIds: roundTasks.map((task) => task.id),
+								status: 'needs-action',
+								error: null,
+								toolCalls: failedResponsesResult.toolCalls,
+								toolCallCount: failedResponsesResult.toolCallCount,
+								maxToolRounds: input.settings.agentMaxToolRounds,
+								webSearchEnabled: input.settings.agentWebSearch,
+								intent: input.intent,
+								executionRoute: input.executionRoute,
+								imageProfileId: fallbackProfile.id
+							})
+						);
+					}
+					toast.warning('原生图片工具失败，需要配置图片 Profile', {
+						description: fallbackBlockReason
+					});
+					return;
+				}
+			}
+
+			error = message;
 			const conversation = getAgentConversation(input.conversationId);
 			if (conversation) {
 				agentConversations = upsertAgentConversation(
 					agentConversations,
 					completeAgentRound(conversation, input.roundId, {
-						content: `Agent 失败：${message}`,
-						outputTaskIds: [input.taskId],
-						error: message,
+						content: hasPartialImages ? 'Agent 请求中断，但已保留收到的预览图。' : `Agent 失败：${message}`,
+						outputTaskIds: roundTasks.map((task) => task.id),
+						status: hasPartialImages ? 'partial' : 'error',
+						error: hasPartialImages ? null : message,
+						toolCalls: failedResponsesResult.toolCalls,
+						toolCallCount: failedResponsesResult.toolCallCount,
 						maxToolRounds: input.settings.agentMaxToolRounds,
-						webSearchEnabled: input.settings.agentWebSearch
+						webSearchEnabled: input.settings.agentWebSearch,
+						intent: input.intent,
+						executionRoute: input.executionRoute,
+						imageProfileId: input.executionRoute === 'image-profile' ? input.profile.id : null
 					})
 				);
 			}
+			if (hasPartialImages) toast.warning('Agent 仅返回预览图', { description: message });
+			else toast.error('Agent 失败', { description: message });
 		}
 	}
 
@@ -862,27 +1328,11 @@
 		for (const requestId of result.requestIds) void cancelNativeRequest(requestId).catch(() => undefined);
 	}
 
-	function buildActualParamsByImage(images: string[], actualParamsList: Array<Partial<TaskParams> | undefined>) {
-		return Object.fromEntries(
-			images
-				.map((_, index) => [String(index), actualParamsList[index]] as const)
-				.filter((entry): entry is readonly [string, Partial<TaskParams>] =>
-					Boolean(entry[1] && Object.keys(entry[1]).length > 0)
-				)
-		);
-	}
-
-	function buildRevisedPromptByImage(images: string[], revisedPrompts: Array<string | undefined>) {
-		return Object.fromEntries(
-			images
-				.map((_, index) => [String(index), revisedPrompts[index]] as const)
-				.filter(
-					(entry): entry is readonly [string, string] => typeof entry[1] === 'string' && entry[1].trim().length > 0
-				)
-		);
-	}
-
 	function retryTask(task: TaskRecord) {
+		if (task.storedMedia) {
+			void taskMedia.withMedia(task, retryTask);
+			return;
+		}
 		prompt = task.prompt;
 		params = { ...task.params };
 		inputImages = task.inputImages.map((image) => ({ ...image }));
@@ -946,6 +1396,9 @@
 		if (requestId) {
 			void cancelNativeRequest(requestId).catch(() => undefined);
 		}
+		cancelGalleryTaskRequests(
+			tasks.filter((task) => task.agentRoundId === roundId && task.status === 'running').map((task) => task.id)
+		);
 		canceledAgentRoundIds = [...new Set([...canceledAgentRoundIds, roundId])];
 		agentConversations = upsertAgentConversation(
 			agentConversations,
@@ -1007,7 +1460,7 @@
 			(task) =>
 				task.agentRoundId === roundId &&
 				task.status !== 'running' &&
-				(task.images.length > 0 || task.streamPartialImageIds.length > 0)
+				(getTaskOutputCount(task) > 0 || getTaskPartialCount(task) > 0)
 		).length;
 	}
 
@@ -1021,6 +1474,14 @@
 	function selectAgentConversation(conversationId: string) {
 		activeAgentConversationId = conversationId;
 		appMode = 'agent';
+	}
+
+	function renameAgentConversation(conversationId: string, title: string) {
+		const nextTitle = title.trim();
+		if (!nextTitle) return;
+		agentConversations = agentConversations.map((conversation) =>
+			conversation.id === conversationId ? { ...conversation, title: nextTitle, updatedAt: Date.now() } : conversation
+		);
 	}
 
 	function removeAgentConversation(conversationId: string) {
@@ -1063,9 +1524,11 @@
 		renamingCollectionName = '';
 	}
 
-	function removeCollection(collectionId: string) {
-		const result = deleteFavoriteCollection(tasks, favoriteCollections, collectionId);
+	async function removeCollection(collectionId: string) {
+		const allTasks = await taskMedia.readAllPreviews();
+		const result = deleteFavoriteCollection(allTasks, favoriteCollections, collectionId);
 		tasks = result.tasks;
+		markAllStoredTasksLoaded(result.tasks.length);
 		settings = normalizeSettings({
 			...settings,
 			favoriteCollections: result.collections,
@@ -1127,7 +1590,7 @@
 		selectionMode = selectedTaskIds.length > 0;
 	}
 
-	function removeSelectedTasks() {
+	async function removeSelectedTasks() {
 		const selectedIds = new Set(selectedTaskIds);
 		const tasksToRemove = tasks.filter((task) => selectedIds.has(task.id));
 		if (!tasksToRemove.length) return;
@@ -1144,33 +1607,34 @@
 		}
 		showBulkDeleteDialog = false;
 		clearTaskSelection();
-		void taskPersistence.deleteTaskSnapshots(tasksToRemove.map((task) => task.id));
+		const deleted = await taskPersistence.deleteTaskSnapshots(tasksToRemove.map((task) => task.id));
+		if (!deleted && canUseTauriPlugins()) {
+			toast.error('删除未能写入数据库', { description: '图片文件已保留，重启后可重新读取任务。' });
+			return;
+		}
 		toast.success('已删除所选任务', { description: `${tasksToRemove.length} 个任务已移除` });
-		cleanupDeletedTaskImages(tasksToRemove, (failedCount) => `${failedCount} 个任务的图片文件清理失败`);
+		if (deleted) cleanupDeletedTaskImages(tasksToRemove, (failedCount) => `${failedCount} 个任务的图片文件清理失败`);
 	}
 
 	function isZipRouteEnabled(route: AppSettings['zipDownloadRoutes'][number]) {
 		return settings.zipDownloadRoutes.includes(route);
 	}
 
-	function saveTasksZip(tasksToDownload: TaskRecord[], fileName: string, emptyMessage: string) {
-		const entries = buildTaskImageDownloadEntries(tasksToDownload);
-		if (!entries.length) {
-			error = emptyMessage;
-			toast.warning(emptyMessage);
-			return;
+	async function saveTasksZip(tasksToDownload: TaskRecord[], fileName: string, emptyMessage: string) {
+		try {
+			const entries = buildTaskImageDownloadEntries(await taskMedia.resolveMany(tasksToDownload));
+			if (!entries.length) {
+				error = emptyMessage;
+				toast.warning(emptyMessage);
+				return;
+			}
+			const blob = createZipBlob(
+				entries.map((entry) => ({ path: entry.path, data: dataUrlToDownloadBytes(entry.dataUrl) }))
+			);
+			if (await saveBlobToFile(blob, fileName)) toast.success('ZIP 已保存', { description: fileName });
+		} catch (err) {
+			handleDownloadError(err);
 		}
-		const blob = createZipBlob(
-			entries.map((entry) => ({
-				path: entry.path,
-				data: dataUrlToDownloadBytes(entry.dataUrl)
-			}))
-		);
-		void saveBlobToFile(blob, fileName)
-			.then((saved) => {
-				if (saved) toast.success('ZIP 已保存', { description: fileName });
-			})
-			.catch(handleDownloadError);
 	}
 
 	function downloadSelectedTasksZip() {
@@ -1193,7 +1657,7 @@
 		saveTasksZip(roundTasks, fileName, '这个 Agent 轮次没有可下载的图片');
 	}
 
-	function removeTask(taskId: string) {
+	async function removeTask(taskId: string) {
 		const taskToRemove = tasks.find((task) => task.id === taskId);
 		const nextTasks = removeTasksById(tasks, [taskId]);
 		tasks = nextTasks;
@@ -1204,19 +1668,32 @@
 			selectedTaskId = null;
 			showTaskDetail = false;
 		}
-		void taskPersistence.deleteTaskSnapshots([taskId]);
+		const deleted = await taskPersistence.deleteTaskSnapshots([taskId]);
+		if (!deleted && canUseTauriPlugins()) {
+			toast.error('删除未能写入数据库', { description: '图片文件已保留，重启后可重新读取任务。' });
+			return;
+		}
 		toast.success('任务已删除');
-		if (taskToRemove) {
+		if (deleted && taskToRemove) {
 			cleanupDeletedTaskImages([taskToRemove], () => '关联图片文件清理失败，可稍后在设置中清理无引用图片');
 		}
 	}
 
 	function openTask(task: TaskRecord) {
+		if (task.storedMedia) {
+			void taskMedia.withMedia(task, openTask);
+			return;
+		}
+		tasks = updateTaskById(tasks, task.id, () => task);
 		selectedTaskId = task.id;
 		showTaskDetail = true;
 	}
 
 	function openTaskLightbox(task: TaskRecord, imageIndex: number) {
+		if (task.storedMedia) {
+			void taskMedia.withMedia(task, (loaded) => openTaskLightbox(loaded, imageIndex));
+			return;
+		}
 		if (!task.images[imageIndex]) return;
 		lightboxImages = task.images;
 		lightboxIndex = imageIndex;
@@ -1239,6 +1716,10 @@
 	}
 
 	function openTaskCardPreview(task: TaskRecord) {
+		if (task.storedMedia) {
+			void taskMedia.withMedia(task, openTaskCardPreview);
+			return;
+		}
 		if (task.images[0]) {
 			openTaskLightbox(task, 0);
 			return;
@@ -1247,21 +1728,37 @@
 	}
 
 	function downloadTaskPrimaryImage(task: TaskRecord) {
+		if (task.storedMedia) {
+			void taskMedia.withMedia(task, downloadTaskPrimaryImage);
+			return;
+		}
 		const image = getTaskPrimaryImage(task);
 		if (image) downloadImage(image, task, 0);
 	}
 
 	function copyTaskPrimaryImage(task: TaskRecord) {
+		if (task.storedMedia) {
+			void taskMedia.withMedia(task, copyTaskPrimaryImage);
+			return;
+		}
 		const image = getTaskPrimaryImage(task);
 		if (image) void copyImage(image);
 	}
 
 	function useTaskPrimaryImageAsReference(task: TaskRecord) {
+		if (task.storedMedia) {
+			void taskMedia.withMedia(task, useTaskPrimaryImageAsReference);
+			return;
+		}
 		const image = getTaskPrimaryImage(task);
 		if (image) void addDataUrlAsReference(image, `partial-${task.id}-1.png`);
 	}
 
 	function openTaskInputLightbox(task: TaskRecord, imageIndex: number) {
+		if (task.storedMedia) {
+			void taskMedia.withMedia(task, (loaded) => openTaskInputLightbox(loaded, imageIndex));
+			return;
+		}
 		const images = task.inputImages.map((image) => image.dataUrl);
 		openImagesLightbox(images, imageIndex, `${task.prompt} 输入图`, null);
 	}
@@ -1403,6 +1900,35 @@
 		return '已完成';
 	}
 
+	function getAgentImageProfileBlockReason(
+		profile: ApiProfile,
+		requestInputImages: InputImage[],
+		requestMask: MaskDraft | null,
+		settingsValue: AppSettings = settings
+	) {
+		if (profile.apiMode !== 'images') return '图片执行 Profile 必须使用 Images 模式';
+		if (!profile.apiKey.trim()) return '图片执行 Profile 尚未配置 API Key';
+		const profileReason = getProfileRequestBlockReason(profile, settingsValue);
+		if (profileReason) return profileReason;
+		return getProviderInputValidationMessage(
+			getProviderCapabilities(profile, settingsValue),
+			requestInputImages.length,
+			Boolean(requestMask)
+		);
+	}
+
+	function getAgentProtocolWarning(result?: AgentResponsesResult) {
+		return result?.unsupportedToolOutput
+			? '上游将工具调用作为普通文本返回；ImagePort 已安全忽略，未执行其中的任何指令。'
+			: null;
+	}
+
+	function mergeAgentRawResponsePayload(primary: string | null, imageProfile: string | null) {
+		if (!primary) return imageProfile;
+		if (!imageProfile) return primary;
+		return JSON.stringify({ responses: primary, imageProfile });
+	}
+
 	function normalizeParamsForRequest(value: TaskParams, profile: ApiProfile, mode: 'gallery' | 'agent'): TaskParams {
 		const capabilities = getProviderCapabilities(profile, settings);
 		const modelControlsOutputCount = mode === 'agent' || capabilities.usesModelControlledOutputCount;
@@ -1451,16 +1977,20 @@
 
 	function getAgentRoundLabel(roundStatus: string | undefined) {
 		if (roundStatus === 'running') return '运行中';
+		if (roundStatus === 'partial') return '仅有预览';
+		if (roundStatus === 'needs-action') return '需要配置';
 		if (roundStatus === 'error') return '失败';
 		if (roundStatus === 'canceled') return '已停止';
 		return '完成';
 	}
 
 	function getAgentRoundClass(roundStatus: string | undefined) {
-		if (roundStatus === 'running') return 'border-blue-200 bg-blue-50 text-blue-700';
-		if (roundStatus === 'error') return 'border-red-200 bg-red-50 text-red-700';
-		if (roundStatus === 'canceled') return 'border-slate-200 bg-slate-50 text-slate-700';
-		return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+		if (roundStatus === 'running') return 'border-primary/25 bg-primary/10 text-primary';
+		if (roundStatus === 'partial') return 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400';
+		if (roundStatus === 'needs-action') return 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400';
+		if (roundStatus === 'error') return 'border-destructive/25 bg-destructive/10 text-destructive';
+		if (roundStatus === 'canceled') return 'border-border bg-muted text-muted-foreground';
+		return 'border-border bg-muted text-foreground';
 	}
 
 	function notifyTaskCompleted(taskPrompt: string, actualCount: number, expectedCount: OutputImageCount) {
@@ -1468,6 +1998,14 @@
 		if (Notification.permission !== 'granted') return;
 		new Notification('ImagePort 生成完成', {
 			body: `${formatImageCountRatio(actualCount, expectedCount)} · ${taskPrompt.slice(0, 48)}`
+		});
+	}
+
+	function notifyAgentImagesCompleted(taskPrompt: string, imageCount: number) {
+		if (!settings.taskCompletionNotification || typeof Notification === 'undefined') return;
+		if (Notification.permission !== 'granted') return;
+		new Notification('ImagePort Agent 生成完成', {
+			body: `${imageCount} 张图片 · ${taskPrompt.slice(0, 48)}`
 		});
 	}
 
@@ -1560,8 +2098,8 @@
 		mask = null;
 	}
 
-	function clearTasks() {
-		const tasksToClear = tasks;
+	async function clearTasks() {
+		const tasksToClear = await taskMedia.readAllPreviews();
 		tasks = [];
 		markAllStoredTasksLoaded(0);
 		void refreshTasksStorageBytes([]);
@@ -1570,9 +2108,10 @@
 		selectedTaskId = null;
 		showTaskDetail = false;
 		localStorage.removeItem(TASKS_STORAGE_KEY);
-		void taskPersistence.deleteTaskSnapshots(tasksToClear.map((task) => task.id));
+		const deleted = await taskPersistence.deleteTaskSnapshots(tasksToClear.map((task) => task.id));
+		if (!deleted && canUseTauriPlugins()) throw new Error('清空未能写入数据库，图片文件已保留，请重新启动后重试。');
 		toast.success('任务已清空', { description: `${tasksToClear.length} 个任务已移除` });
-		cleanupDeletedTaskImages(tasksToClear, (failedCount) => `${failedCount} 个任务的图片文件清理失败`);
+		if (deleted) cleanupDeletedTaskImages(tasksToClear, (failedCount) => `${failedCount} 个任务的图片文件清理失败`);
 	}
 
 	function cleanupDeletedTaskImages(
@@ -1603,30 +2142,35 @@
 		return result;
 	}
 
-	function exportTasks() {
-		const file = buildTasksExportFile(tasks);
-		void saveBlobToFile(file.blob, file.fileName)
-			.then((saved) => {
-				if (saved) toast.success('任务已导出', { description: `${tasks.length} 个已加载任务` });
-			})
-			.catch(handleDownloadError);
+	async function exportTasks() {
+		try {
+			const allTasks = await taskMedia.resolveMany(await taskMedia.readAllPreviews());
+			const file = buildTasksExportFile(allTasks);
+			if (await saveBlobToFile(file.blob, file.fileName))
+				toast.success('任务已导出', { description: `${allTasks.length} 个任务` });
+		} catch (err) {
+			handleDownloadError(err);
+		}
 	}
 
-	function exportFullBackup() {
-		const file = buildFullBackupExportFile({ tasks, settings, agentConversations });
-		void saveBlobToFile(file.blob, file.fileName)
-			.then((saved) => {
-				if (saved) toast.success('完整备份已导出', { description: file.fileName });
-			})
-			.catch(handleDownloadError);
+	async function exportFullBackup() {
+		try {
+			const allTasks = await taskMedia.resolveMany(await taskMedia.readAllPreviews());
+			const file = buildFullBackupExportFile({ tasks: allTasks, settings, agentConversations });
+			if (await saveBlobToFile(file.blob, file.fileName))
+				toast.success('完整备份已导出', { description: file.fileName });
+		} catch (err) {
+			handleDownloadError(err);
+		}
 	}
 
 	async function importTasksFromFile(file: File): Promise<TaskImportSummary> {
-		const summary = await readTaskImportFile(file, tasks);
+		const summary = await readTaskImportFile(file, await taskMedia.readAllPreviews());
 		tasks = summary.tasks;
 		markAllStoredTasksLoaded(summary.tasks.length);
 		void refreshTasksStorageBytes(summary.tasks);
-		await taskPersistence.persistTasksSnapshot(summary.tasks);
+		const saved = await taskPersistence.persistTasksSnapshot(summary.tasks);
+		if (!saved && canUseTauriPlugins()) throw new Error('导入未能写入数据库，请重试；原有记录仍保留在数据库中。');
 		toast.success('任务已导入', {
 			description: `新增 ${summary.addedCount} 个，跳过 ${summary.skippedDuplicateCount} 个重复任务`
 		});
@@ -1636,7 +2180,7 @@
 	async function importFullBackupFromFile(file: File): Promise<TaskImportSummary> {
 		const result = await readFullBackupImportFile({
 			file,
-			tasks,
+			tasks: await taskMedia.readAllPreviews(),
 			settings,
 			agentConversations,
 			activeAgentConversationId
@@ -1648,7 +2192,8 @@
 		tasks = summary.tasks;
 		markAllStoredTasksLoaded(summary.tasks.length);
 		void refreshTasksStorageBytes(summary.tasks);
-		await taskPersistence.persistTasksSnapshot(summary.tasks);
+		const saved = await taskPersistence.persistTasksSnapshot(summary.tasks);
+		if (!saved && canUseTauriPlugins()) throw new Error('恢复未能写入数据库，请重试；原有记录仍保留在数据库中。');
 		toast.success('完整备份已恢复', {
 			description: `新增 ${summary.addedCount} 个任务，跳过 ${summary.skippedDuplicateCount} 个重复任务`
 		});
@@ -1728,12 +2273,20 @@
 	}
 
 	async function useOutputAsReference(task: TaskRecord, imageIndex: number) {
+		if (task.storedMedia) {
+			await taskMedia.withMedia(task, (loaded) => useOutputAsReference(loaded, imageIndex));
+			return;
+		}
 		const image = task.images[imageIndex];
 		if (!image) return;
 		await addDataUrlAsReference(image, `output-${task.id}-${imageIndex + 1}.${extensionFromDataUrl(image)}`);
 	}
 
 	async function editOutputWithMask(task: TaskRecord, imageIndex: number) {
+		if (task.storedMedia) {
+			await taskMedia.withMedia(task, (loaded) => editOutputWithMask(loaded, imageIndex));
+			return;
+		}
 		if (!composerCapabilities.supportsMask) {
 			await useOutputAsReference(task, imageIndex);
 			toast.info('当前模型不支持像素级蒙版', {
@@ -1759,6 +2312,60 @@
 	<title>ImagePort</title>
 </svelte:head>
 
+{#snippet workspaceComposer(embedded: boolean)}
+	<GalleryComposer
+		{appMode}
+		{embedded}
+		bind:inputBarHeight
+		bind:prompt
+		bind:agentPrompt
+		bind:params
+		{inputImages}
+		{mask}
+		{error}
+		{settings}
+		activeProfile={composerProfile}
+		agentThinkingProfile={agentProfile}
+		{agentImageProfile}
+		agentIntent={agentDraftIntent}
+		agentExecutionRoute={agentDraftExecutionRoute}
+		{effectiveGalleryProfile}
+		{activeParams}
+		{profileBlockReason}
+		{agentBlockReason}
+		{nextGalleryProfileOverrideId}
+		{canSubmit}
+		{canSubmitAgent}
+		maxInputImages={composerCapabilities.maxInputImages}
+		maxOutputImages={composerCapabilities.maxOutputImages}
+		qualityOptions={composerCapabilities.qualityOptions}
+		formatOptions={composerCapabilities.formatOptions}
+		moderationOptions={composerCapabilities.moderationOptions}
+		supportsOutputCompression={composerCapabilities.supportsOutputCompression}
+		imageEditSupported={composerCapabilities.supportsImageEdit}
+		imageEditUnsupportedReason={composerCapabilities.supportsImageEdit
+			? null
+			: '当前服务商未配置图像编辑能力，请切换服务商后再添加参考图。'}
+		maskSupported={composerCapabilities.supportsMask}
+		maskUnsupportedReason={composerCapabilities.maskUnsupportedReason}
+		onSubmit={() => void (appMode === 'agent' ? submitAgentMessage() : submitGeneration())}
+		onPaste={handlePaste}
+		onOpenFilePicker={openFilePicker}
+		onOpenSizePicker={() => (showSizePicker = true)}
+		onRemoveInputImage={removeInputImage}
+		onClearInputImages={clearInputImages}
+		onClearMask={() => (mask = null)}
+		onEditMask={(id) => {
+			maskEditorImageId = id;
+			showMaskEditor = true;
+		}}
+	/>
+{/snippet}
+
+{#snippet agentComposer()}
+	{@render workspaceComposer(true)}
+{/snippet}
+
 <div class="bg-background text-foreground flex h-screen min-h-0 flex-col overflow-hidden">
 	<header data-no-drag-select class="border-border/80 bg-background/95 z-40 shrink-0 border-b backdrop-blur">
 		<div class="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
@@ -1766,12 +2373,12 @@
 				<ImagePortLogo class="size-8 rounded-lg shadow-xs" />
 				<div class="min-w-0">
 					<h1 class="truncate text-lg font-bold tracking-normal">ImagePort</h1>
-					<p class="text-muted-foreground text-xs">Gallery</p>
+					<p class="text-muted-foreground text-xs">{appMode === 'gallery' ? 'Gallery' : 'Agent'}</p>
 				</div>
 			</div>
 
 			<div class="flex items-center gap-2">
-				<div class="border-border bg-muted/60 hidden items-center gap-1 rounded-lg border p-1 shadow-xs sm:flex">
+				<div class="border-border bg-muted/60 flex items-center gap-1 rounded-lg border p-1 shadow-xs">
 					<Button
 						variant={appMode === 'gallery' ? 'default' : 'ghost'}
 						size="sm"
@@ -1802,8 +2409,10 @@
 	<main
 		data-home-main
 		data-drag-select-surface
-		class={`min-h-0 flex-1 overflow-y-auto px-4 sm:px-6 ${selectionBox ? 'select-none' : ''}`}
-		style={`padding-bottom:${taskViewportBottomPadding}px;`}
+		class={appMode === 'gallery'
+			? `min-h-0 flex-1 overflow-y-auto px-4 sm:px-6 ${selectionBox ? 'select-none' : ''}`
+			: 'min-h-0 flex-1 overflow-hidden'}
+		style={appMode === 'gallery' ? `padding-bottom:${taskViewportBottomPadding}px;` : undefined}
 		ondrop={handleDrop}
 		ondragover={handleDragOver}
 		onpointerdown={startDragSelection}
@@ -2042,14 +2651,19 @@
 				{agentConversations}
 				{activeAgentConversation}
 				{activeAgentTasks}
-				{activeProfile}
+				activeProfile={agentProfile}
+				activeImageProfile={agentImageProfile}
 				{settings}
 				{tasks}
+				composer={agentComposer}
 				bind:messagesViewport={agentMessagesViewport}
 				canDownloadRoundZip={isZipRouteEnabled('agent-round-all')}
 				onCreateConversation={createNewAgentConversation}
 				onSelectConversation={selectAgentConversation}
 				onRemoveConversation={removeAgentConversation}
+				onRenameConversation={renameAgentConversation}
+				onUsePrompt={(prompt) => (agentPrompt = prompt)}
+				onOpenSettings={openSettings}
 				onStopRound={stopAgentRound}
 				onRetryRound={retryAgentRound}
 				onContinueRound={continueAgentRound}
@@ -2064,48 +2678,9 @@
 		{/if}
 	</main>
 
-	<GalleryComposer
-		{appMode}
-		bind:inputBarHeight
-		bind:prompt
-		bind:agentPrompt
-		bind:params
-		{inputImages}
-		{mask}
-		{error}
-		{settings}
-		{activeProfile}
-		{effectiveGalleryProfile}
-		{activeParams}
-		{profileBlockReason}
-		{agentBlockReason}
-		{nextGalleryProfileOverrideId}
-		{canSubmit}
-		{canSubmitAgent}
-		maxInputImages={composerCapabilities.maxInputImages}
-		maxOutputImages={composerCapabilities.maxOutputImages}
-		qualityOptions={composerCapabilities.qualityOptions}
-		formatOptions={composerCapabilities.formatOptions}
-		moderationOptions={composerCapabilities.moderationOptions}
-		supportsOutputCompression={composerCapabilities.supportsOutputCompression}
-		imageEditSupported={composerCapabilities.supportsImageEdit}
-		imageEditUnsupportedReason={composerCapabilities.supportsImageEdit
-			? null
-			: '当前服务商未配置图像编辑能力，请切换服务商后再添加参考图。'}
-		maskSupported={composerCapabilities.supportsMask}
-		maskUnsupportedReason={composerCapabilities.maskUnsupportedReason}
-		onSubmit={() => void (appMode === 'agent' ? submitAgentMessage() : submitGeneration())}
-		onPaste={handlePaste}
-		onOpenFilePicker={openFilePicker}
-		onOpenSizePicker={() => (showSizePicker = true)}
-		onRemoveInputImage={removeInputImage}
-		onClearInputImages={clearInputImages}
-		onClearMask={() => (mask = null)}
-		onEditMask={(id) => {
-			maskEditorImageId = id;
-			showMaskEditor = true;
-		}}
-	/>
+	{#if appMode === 'gallery'}
+		{@render workspaceComposer(false)}
+	{/if}
 
 	<input
 		bind:this={fileInput}

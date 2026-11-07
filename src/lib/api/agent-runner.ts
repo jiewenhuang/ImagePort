@@ -1,13 +1,18 @@
 import {
 	buildAgentResponsesRequest,
 	enforceAgentToolBudget,
+	getAgentStreamFailureMessage,
+	parseAgentImageToolStartEvent,
+	parseAgentPartialImageEvent,
 	parseAgentResponsesPayload,
 	parseAgentResponsesStreamEvents,
+	type AgentImageToolStart,
+	type AgentPartialImage,
 	type AgentResponsesResult
 } from './agent-runtime';
 import { getNativeResponseErrorMessage } from './http-error';
 import { createJsonServerSentEventCollector } from './server-sent-events';
-import type { AgentConversation } from '$lib/domain/agent';
+import type { AgentConversation, AgentRoundIntent } from '$lib/domain/agent';
 import type { ApiProfile, AppSettings } from '$lib/domain/settings';
 import type {
 	InputImage,
@@ -21,7 +26,7 @@ import type {
 export interface AgentResponsesRunnerInput {
 	conversation: AgentConversation;
 	roundId: string;
-	taskId: string;
+	intent: AgentRoundIntent;
 	profile: ApiProfile;
 	settings: AppSettings;
 	prompt: string;
@@ -33,7 +38,8 @@ export interface AgentResponsesRunnerInput {
 	nativeJsonStreamRequest(request: NativeStreamRequest, onChunk: (chunk: string) => void): Promise<NativeJsonResponse>;
 	onActiveRequestId(requestId: string | null): void;
 	onText(conversationId: string, roundId: string, content: string): void;
-	onPartialImages(taskId: string, partialImages: string[]): void;
+	onImageToolStarted(event: AgentImageToolStart): void;
+	onPartialImage(event: AgentPartialImage): void;
 	isCanceled(): boolean;
 }
 
@@ -44,6 +50,7 @@ export async function runAgentResponsesRequest(input: AgentResponsesRunnerInput)
 		settings: input.settings,
 		conversation: input.conversation,
 		roundId: input.roundId,
+		intent: input.intent,
 		prompt: input.prompt,
 		params: input.params,
 		inputImages: input.inputImages,
@@ -68,17 +75,26 @@ export async function runAgentResponsesRequest(input: AgentResponsesRunnerInput)
 
 		const events: Array<Record<string, unknown>> = [];
 		let lastText = '';
-		let lastPartialImageCount = 0;
+		const startedImageToolCallIds = new Set<string>();
 		const collector = createJsonServerSentEventCollector((event) => {
 			events.push(event);
+			const startedImageTool = parseAgentImageToolStartEvent(event);
+			if (startedImageTool && !startedImageToolCallIds.has(startedImageTool.toolCallId)) {
+				startedImageToolCallIds.add(startedImageTool.toolCallId);
+				input.onImageToolStarted(startedImageTool);
+			}
+			const partialImage = parseAgentPartialImageEvent(event, input.params.output_format);
+			if (partialImage) {
+				if (!startedImageToolCallIds.has(partialImage.toolCallId)) {
+					startedImageToolCallIds.add(partialImage.toolCallId);
+					input.onImageToolStarted({ toolCallId: partialImage.toolCallId });
+				}
+				input.onPartialImage(partialImage);
+			}
 			const parsed = parseAgentResponsesStreamEvents(events, input.params.output_format);
 			if (parsed.text && parsed.text !== lastText) {
 				lastText = parsed.text;
 				input.onText(input.conversation.id, input.roundId, parsed.text);
-			}
-			if (parsed.partialImages.length > lastPartialImageCount) {
-				lastPartialImageCount = parsed.partialImages.length;
-				input.onPartialImages(input.taskId, parsed.partialImages);
 			}
 		});
 		const response = await input.nativeJsonStreamRequest(
@@ -93,6 +109,8 @@ export async function runAgentResponsesRequest(input: AgentResponsesRunnerInput)
 		if (response.status < 200 || response.status >= 300) {
 			throw new Error(getNativeResponseErrorMessage(response.body, response.status));
 		}
+		const streamFailureMessage = getAgentStreamFailureMessage(events);
+		if (streamFailureMessage) throw new Error(streamFailureMessage);
 		return enforceAgentToolBudget(
 			parseAgentResponsesStreamEvents(events, input.params.output_format),
 			input.settings.agentMaxToolRounds

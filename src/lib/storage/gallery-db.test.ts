@@ -1,4 +1,8 @@
 import { describe, expect, test } from 'bun:test';
+import { buildExportedTasks, normalizeTasks } from '$lib/domain/task-storage';
+import { buildFullBackupPayload } from '$lib/domain/full-backup';
+import { buildTaskImageDownloadEntries } from '$lib/domain/download';
+import { DEFAULT_SETTINGS } from '$lib/domain/settings';
 import { createEmptyTaskMetadata, DEFAULT_PARAMS, type TaskRecord } from '$lib/domain/types';
 import {
 	cleanupUnreferencedTaskImageFiles,
@@ -8,8 +12,8 @@ import {
 	deleteTaskRows,
 	hydrateFileBackedTaskPayload,
 	parseTaskPayload,
+	previewFileBackedTaskPayload,
 	serializeTaskRow,
-	runSqlBatchWithTransaction,
 	selectTaskRowsPage,
 	upsertTaskRow,
 	type FileBackedTaskPayload,
@@ -104,12 +108,9 @@ describe('gallery db row helpers', () => {
 		);
 
 		expect(rows.map((row) => row.id)).toEqual(['task-2', 'task-1']);
-		expect(calls).toEqual([
-			{
-				sql: 'SELECT id, payload FROM gallery_tasks ORDER BY created_at DESC LIMIT $1 OFFSET $2',
-				values: [2, 4]
-			}
-		]);
+		expect(calls.length).toBe(1);
+		expect(calls[0].sql.includes('ORDER BY created_at DESC LIMIT $1 OFFSET $2')).toBe(true);
+		expect(calls[0].values).toEqual([2, 4]);
 	});
 
 	test('counts task rows for incremental hydration', async () => {
@@ -142,112 +143,6 @@ describe('agent db row helpers', () => {
 		expect(row[2]).toBe(100);
 		expect(row[3]).toBe(200);
 		expect(JSON.parse(String(row[4])).id).toBe('conv-1');
-	});
-});
-
-describe('sql batch transaction helper', () => {
-	test('wraps batch operations in a transaction when transaction control works', async () => {
-		const calls: string[] = [];
-
-		await runSqlBatchWithTransaction(
-			{
-				async execute(sql) {
-					calls.push(sql);
-				}
-			},
-			[
-				async (db) => {
-					await db.execute('UPSERT ONE');
-				},
-				async (db) => {
-					await db.execute('DELETE STALE');
-				}
-			]
-		);
-
-		expect(calls).toEqual(['BEGIN IMMEDIATE', 'UPSERT ONE', 'DELETE STALE', 'COMMIT']);
-	});
-
-	test('falls back to sequential operations when transaction commands are unavailable', async () => {
-		const calls: string[] = [];
-
-		await runSqlBatchWithTransaction(
-			{
-				async execute(sql) {
-					calls.push(sql);
-					if (sql === 'BEGIN IMMEDIATE') throw new Error('sql.execute not allowed');
-				}
-			},
-			[
-				async (db) => {
-					await db.execute('UPSERT ONE');
-				},
-				async (db) => {
-					await db.execute('DELETE STALE');
-				}
-			]
-		);
-
-		expect(calls).toEqual(['BEGIN IMMEDIATE', 'UPSERT ONE', 'DELETE STALE']);
-	});
-
-	test('falls back to sequential operations when commit reports no active transaction', async () => {
-		const calls: string[] = [];
-
-		await runSqlBatchWithTransaction(
-			{
-				async execute(sql) {
-					calls.push(sql);
-					if (sql === 'COMMIT') throw new Error('cannot commit - no transaction is active');
-				}
-			},
-			[
-				async (db) => {
-					await db.execute('UPSERT ONE');
-				},
-				async (db) => {
-					await db.execute('DELETE STALE');
-				}
-			]
-		);
-
-		expect(calls).toEqual([
-			'BEGIN IMMEDIATE',
-			'UPSERT ONE',
-			'DELETE STALE',
-			'COMMIT',
-			'ROLLBACK',
-			'UPSERT ONE',
-			'DELETE STALE'
-		]);
-	});
-
-	test('rolls back and keeps operation errors visible', async () => {
-		const calls: string[] = [];
-		let message = '';
-
-		try {
-			await runSqlBatchWithTransaction(
-				{
-					async execute(sql) {
-						calls.push(sql);
-					}
-				},
-				[
-					async (db) => {
-						await db.execute('UPSERT ONE');
-					},
-					async () => {
-						throw new Error('payload failed');
-					}
-				]
-			);
-		} catch (err) {
-			message = err instanceof Error ? err.message : String(err);
-		}
-
-		expect(message).toBe('payload failed');
-		expect(calls).toEqual(['BEGIN IMMEDIATE', 'UPSERT ONE', 'ROLLBACK']);
 	});
 });
 
@@ -354,6 +249,91 @@ describe('file-backed task payloads', () => {
 		expect(hydrated?.streamPartialImageIds).toEqual([]);
 	});
 
+	test('reads only thumbnails for history and retains references during favorite updates', async () => {
+		const files = createMemoryImageStore();
+		const original = task({
+			inputImages: [{ id: 'ref', name: 'reference.png', dataUrl: 'data:image/png;base64,aW5wdXQ=' }]
+		});
+		const payload = await createFileBackedTaskPayload(original, files, async () => 'data:image/webp;base64,dGh1bWI=');
+		const readPaths: string[] = [];
+		const preview = await previewFileBackedTaskPayload(payload, {
+			...files,
+			async read(file) {
+				readPaths.push(file.path);
+				return files.read(file);
+			}
+		});
+		expect(readPaths).toEqual(payload.imageRefs.thumbnails.map((file) => file.path));
+		expect(preview.images).toEqual(['data:image/webp;base64,dGh1bWI=']);
+		expect(preview.inputImages).toEqual([]);
+		for (const build of [
+			buildExportedTasks,
+			buildTaskImageDownloadEntries,
+			(tasks: TaskRecord[]) => buildFullBackupPayload(tasks, DEFAULT_SETTINGS)
+		]) {
+			let message = '';
+			try {
+				build([preview]);
+			} catch (error) {
+				message = String(error);
+			}
+			expect(message.includes('请先读取任务原图')).toBe(true);
+		}
+
+		let writes = 0;
+		const saved = await createFileBackedTaskPayload(normalizeTasks([{ ...preview, isFavorite: true }])[0], {
+			...files,
+			async save() {
+				writes++;
+				return null;
+			}
+		});
+		expect(writes).toBe(0);
+		expect(saved.imageRefs).toEqual(payload.imageRefs);
+		expect(saved.task.isFavorite).toBe(true);
+		expect(saved.task.storedMedia).toBe(undefined);
+		expect((await hydrateFileBackedTaskPayload(saved, files))?.inputImages).toEqual(original.inputImages);
+		expect((await hydrateFileBackedTaskPayload(saved, files))?.images).toEqual(original.images);
+	});
+
+	test('protects images referenced by unloaded database pages during cleanup', async () => {
+		const files = createMemoryImageStore();
+		const unloaded = await createFileBackedTaskPayload(task({ id: 'unloaded' }), files);
+		const removed: string[] = [];
+		const result = await cleanupUnreferencedTaskImageFiles(
+			[],
+			{
+				async list() {
+					return [
+						...unloaded.imageRefs.outputs,
+						...unloaded.imageRefs.thumbnails,
+						{ path: 'images/orphan.png', mime: 'image/png' }
+					];
+				},
+				async remove(file) {
+					removed.push(file.path);
+					return true;
+				}
+			},
+			async () => [{ id: 'unloaded', payload: JSON.stringify(unloaded) }]
+		);
+		expect(removed).toEqual(['images/orphan.png']);
+		expect(result).toEqual({ removedCount: 1, failedCount: 0 });
+	});
+
+	test('fails clearly if an original is missing instead of using its thumbnail', async () => {
+		const files = createMemoryImageStore();
+		const payload = await createFileBackedTaskPayload(task(), files);
+		files.images.delete(payload.imageRefs.outputs[0].path);
+		let message = '';
+		try {
+			await hydrateFileBackedTaskPayload(payload, files);
+		} catch (error) {
+			message = String(error);
+		}
+		expect(message.includes('本地图片文件缺失')).toBe(true);
+	});
+
 	test('keeps usable task data when a referenced image file cannot be read', async () => {
 		const files = createMemoryImageStore();
 		const original = task({
@@ -395,6 +375,30 @@ describe('file-backed task payloads', () => {
 });
 
 describe('task image file cleanup', () => {
+	test('does not delete files if a stored history row cannot be parsed', async () => {
+		const removed: string[] = [];
+		let message = '';
+		try {
+			await cleanupUnreferencedTaskImageFiles(
+				[],
+				{
+					async list() {
+						return [{ path: 'images/outputs/preserved.png', mime: 'image/png' }];
+					},
+					async remove(file) {
+						removed.push(file.path);
+						return true;
+					}
+				},
+				async () => [{ id: 'corrupted', payload: '{invalid' }]
+			);
+		} catch (error) {
+			message = (error as Error).message;
+		}
+		expect(message.includes('已暂停图片清理')).toBe(true);
+		expect(removed).toEqual([]);
+	});
+
 	test('removes stored image files that are no longer referenced by current tasks', async () => {
 		const removed: string[] = [];
 		const index: StoredImageFileIndex = {

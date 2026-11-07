@@ -89,6 +89,19 @@ export interface CallApiResult {
 	streamPartialImages?: string[];
 }
 
+export interface TaskMediaFile {
+	path: string;
+	mime: string;
+}
+
+export interface StoredTaskMedia {
+	outputs: TaskMediaFile[];
+	thumbnails: TaskMediaFile[];
+	partials?: TaskMediaFile[];
+	inputs: Array<TaskMediaFile & { id: string; name: string }>;
+	mask: (TaskMediaFile & { targetImageId: string; updatedAt: number }) | null;
+}
+
 export interface TaskRecord {
 	id: string;
 	prompt: string;
@@ -97,6 +110,8 @@ export interface TaskRecord {
 	mask: MaskDraft | null;
 	images: string[];
 	thumbnailImages?: string[];
+	/** Present only while this history record contains previews rather than original media. */
+	storedMedia?: StoredTaskMedia;
 	status: 'running' | 'done' | 'partial' | 'error';
 	error: string | null;
 	createdAt: number;

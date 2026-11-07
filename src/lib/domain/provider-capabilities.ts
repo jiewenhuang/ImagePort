@@ -56,7 +56,7 @@ const OPENAI_CAPABILITIES: ProviderCapabilities = {
 };
 
 export function getProviderCapabilities(
-	profile: Pick<ApiProfile, 'provider' | 'model' | 'apiMode'>,
+	profile: Pick<ApiProfile, 'provider' | 'model' | 'apiMode'> & Partial<Pick<ApiProfile, 'apiProtocol'>>,
 	settings?: Pick<AppSettings, 'customProviders'>
 ): ProviderCapabilities {
 	if (profile.provider === 'xai') {
@@ -88,7 +88,7 @@ export function getProviderCapabilities(
 			supportsPartialImages: false,
 			supportsOutputCompression: false,
 			qualityOptions: [],
-			formatOptions: ['png', 'jpeg'],
+			formatOptions: profile.apiProtocol?.startsWith('gemini-generate-content') ? ['png'] : ['png', 'jpeg'],
 			moderationOptions: [],
 			sizeTiers: isLite ? ['1K'] : ['1K', '2K', '4K'],
 			aspectRatios: GOOGLE_RATIOS,

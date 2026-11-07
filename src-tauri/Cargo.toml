@@ -31,3 +31,9 @@ reqwest = { version = "0.13.4", features = ["json", "multipart", "stream"] }
 base64 = "0.22.1"
 futures-util = "0.3"
 tokio = { version = "1", features = ["time"] }
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
+
+# Avoid malformed proc-macro dylibs with Rust 1.95 / macOS 27's stricter loader.
+# https://github.com/rust-lang/rust/issues/157750
+[profile.release.build-override]
+strip = "none"

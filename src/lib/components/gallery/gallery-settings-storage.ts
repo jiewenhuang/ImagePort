@@ -1,4 +1,4 @@
-export type GallerySettingsStorageTab = 'general' | 'api' | 'agent' | 'data' | 'about';
+export type GallerySettingsStorageTab = 'general' | 'api' | 'workspace' | 'agent' | 'data' | 'about';
 
 export function formatStorageBytes(bytes: number | null) {
 	if (bytes == null) return '计算中...';
@@ -19,7 +19,7 @@ export function formatLoadedTaskCount(loadedCount: number, totalCount: number | 
 }
 
 export function getTaskStorageEstimateLabel(loadedCount: number, totalCount: number | null) {
-	return normalizeCount(totalCount) > normalizeCount(loadedCount) ? '已加载任务导出 JSON 估算' : '导出 JSON 估算';
+	return normalizeCount(totalCount) > normalizeCount(loadedCount) ? '已加载预览数据估算' : '预览数据估算';
 }
 
 export function shouldRefreshStorageBytesForTab(tab: GallerySettingsStorageTab) {

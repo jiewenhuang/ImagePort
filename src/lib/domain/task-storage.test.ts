@@ -207,6 +207,15 @@ describe('resolveStoredTasks', () => {
 });
 
 describe('mergeTaskSnapshots', () => {
+	test('preserves live requests while marking interrupted stored requests as failed', () => {
+		const live = task({ id: 'live', status: 'running', finishedAt: null });
+		const resolved = mergeTaskSnapshots([live], [task({ id: 'interrupted', status: 'running', finishedAt: null })]);
+
+		expect(resolved.find((item) => item.id === 'live')?.status).toBe('running');
+		expect(resolved.find((item) => item.id === 'live')?.finishedAt).toBe(null);
+		expect(resolved.find((item) => item.id === 'interrupted')?.status).toBe('error');
+	});
+
 	test('keeps preferred tasks when duplicate ids exist', () => {
 		const resolved = mergeTaskSnapshots(
 			[task({ id: 'same', prompt: 'current prompt', createdAt: 200 })],

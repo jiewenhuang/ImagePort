@@ -1,3 +1,4 @@
+import { getTaskOutputCount, getTaskPartialCount, getTaskInputCount } from '$lib/domain/task-media';
 import { getTaskPreviewImages } from '$lib/domain/task-gallery';
 import type { OutputImageCount, TaskRecord } from '$lib/domain/types';
 
@@ -28,9 +29,12 @@ export interface TaskCardViewModel {
 }
 
 export function buildTaskCardViewModel(task: TaskRecord, options: TaskCardViewModelOptions): TaskCardViewModel {
-	const previewImages = task.images.length ? getTaskPreviewImages(task) : task.streamPartialImageIds.slice(-4);
+	const outputCount = getTaskOutputCount(task);
+	const partialCount = getTaskPartialCount(task);
+	const inputCount = getTaskInputCount(task);
+	const previewImages = outputCount ? getTaskPreviewImages(task) : task.streamPartialImageIds.slice(-4);
 	const primaryImage = task.images[0] ?? task.streamPartialImageIds[0] ?? null;
-	const downloadableImageCount = task.images.length + task.streamPartialImageIds.length;
+	const downloadableImageCount = outputCount + partialCount;
 	const elapsedText = formatDuration((task.finishedAt ?? options.now) - task.createdAt);
 	const expectedText = formatExpectedImageCount(task.params.n);
 	const partialText = task.streamPartialImageIds.length ? ` · partial ${task.streamPartialImageIds.length} 张` : '';
@@ -40,20 +44,20 @@ export function buildTaskCardViewModel(task: TaskRecord, options: TaskCardViewMo
 		previewImages,
 		primaryImage,
 		downloadableImageCount,
-		canOpenPreview: Boolean(task.images.length || task.streamPartialImageIds.length),
-		canDownloadPrimary: Boolean(primaryImage),
+		canOpenPreview: Boolean(outputCount || partialCount),
+		canDownloadPrimary: outputCount + partialCount > 0,
 		canDownloadAll: downloadableImageCount > 1,
 		canDownloadZip: options.canDownloadZip && downloadableImageCount > 0,
-		canEditMask: Boolean(task.images[0]),
+		canEditMask: outputCount > 0,
 		statusLabel: getStatusLabel(task.status),
 		statusClass: getStatusClass(task.status),
-		imageCountRatio: formatImageCountRatio(task.images.length, task.params.n),
+		imageCountRatio: formatImageCountRatio(outputCount, task.params.n),
 		detailText: `${task.params.size} · ${task.params.quality} · ${task.params.output_format} · ${formatTaskTime(task.createdAt)}`,
-		progressText: `${task.status === 'running' ? '等待' : '耗时'} ${elapsedText} · 预计 ${expectedText} · 实际 ${task.images.length} 张${partialText}`,
+		progressText: `${task.status === 'running' ? '等待' : '耗时'} ${elapsedText} · 预计 ${expectedText} · 实际 ${outputCount} 张${partialText}`,
 		runningElapsedText: `生成中 · ${elapsedText}`,
 		runningExpectedText: `预计 ${expectedText}`,
 		runningPartialText: `生成中 · partial ${task.streamPartialImageIds.length} 张`,
-		inputImageCountText: task.inputImages.length ? `参考图 ${task.inputImages.length}` : null
+		inputImageCountText: inputCount ? `参考图 ${inputCount}` : null
 	};
 }
 

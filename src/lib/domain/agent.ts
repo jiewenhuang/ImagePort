@@ -1,7 +1,9 @@
 import type { InputImage, MaskDraft, TaskRecord } from './types';
 
 export type AgentMessageRole = 'user' | 'assistant';
-export type AgentRoundStatus = 'running' | 'done' | 'error' | 'canceled';
+export type AgentRoundStatus = 'running' | 'done' | 'partial' | 'needs-action' | 'error' | 'canceled';
+export type AgentRoundIntent = 'conversation' | 'image-generate' | 'image-edit';
+export type AgentExecutionRoute = 'responses' | 'native-image-tool' | 'image-profile';
 
 export interface AgentToolCallSummary {
 	id: string | null;
@@ -38,6 +40,10 @@ export interface AgentRound {
 	webSearchEnabled: boolean;
 	retryOfRoundId: string | null;
 	continuedFromRoundId: string | null;
+	intent: AgentRoundIntent;
+	executionRoute: AgentExecutionRoute;
+	imageProfileId: string | null;
+	protocolWarning: string | null;
 	createdAt: number;
 	finishedAt: number | null;
 }
@@ -72,6 +78,9 @@ export function createAgentUserRound(
 		webSearchEnabled?: boolean;
 		retryOfRoundId?: string | null;
 		continuedFromRoundId?: string | null;
+		intent?: AgentRoundIntent;
+		executionRoute?: AgentExecutionRoute;
+		imageProfileId?: string | null;
 		now?: number;
 		createId?: () => string;
 	}
@@ -98,6 +107,10 @@ export function createAgentUserRound(
 		webSearchEnabled: input.webSearchEnabled ?? false,
 		retryOfRoundId: input.retryOfRoundId ?? null,
 		continuedFromRoundId: input.continuedFromRoundId ?? null,
+		intent: input.intent ?? 'conversation',
+		executionRoute: input.executionRoute ?? 'responses',
+		imageProfileId: input.imageProfileId ?? null,
+		protocolWarning: null,
 		createdAt: now,
 		finishedAt: null
 	};
@@ -136,6 +149,10 @@ export function completeAgentRound(
 		webSearchEnabled?: boolean;
 		retryOfRoundId?: string | null;
 		continuedFromRoundId?: string | null;
+		intent?: AgentRoundIntent;
+		executionRoute?: AgentExecutionRoute;
+		imageProfileId?: string | null;
+		protocolWarning?: string | null;
 		now?: number;
 		createId?: () => string;
 	}
@@ -145,7 +162,7 @@ export function completeAgentRound(
 	const round = conversation.rounds.find((item) => item.id === roundId);
 	if (!round) return conversation;
 	const assistantMessageId = round.assistantMessageId ?? createId();
-	const outputTaskIds = input.outputTaskIds ?? [];
+	const outputTaskIds = input.outputTaskIds ?? round.outputTaskIds;
 	const hasAssistantMessage = conversation.messages.some((message) => message.id === assistantMessageId);
 	const messages = hasAssistantMessage
 		? conversation.messages.map((message) =>
@@ -189,6 +206,10 @@ export function completeAgentRound(
 						webSearchEnabled: input.webSearchEnabled ?? item.webSearchEnabled,
 						retryOfRoundId: input.retryOfRoundId ?? item.retryOfRoundId,
 						continuedFromRoundId: input.continuedFromRoundId ?? item.continuedFromRoundId,
+						intent: input.intent ?? item.intent,
+						executionRoute: input.executionRoute ?? item.executionRoute,
+						imageProfileId: input.imageProfileId ?? item.imageProfileId,
+						protocolWarning: input.protocolWarning ?? item.protocolWarning,
 						finishedAt: now
 					}
 				: item
@@ -261,6 +282,25 @@ export function updateAgentAssistantMessage(
 	};
 }
 
+export function attachAgentOutputTask(
+	conversation: AgentConversation,
+	roundId: string,
+	taskId: string,
+	now = Date.now()
+): AgentConversation {
+	const round = conversation.rounds.find((item) => item.id === roundId);
+	if (!round?.assistantMessageId || round.outputTaskIds.includes(taskId)) return conversation;
+	const outputTaskIds = [...round.outputTaskIds, taskId];
+	return {
+		...conversation,
+		messages: conversation.messages.map((message) =>
+			message.id === round.assistantMessageId ? { ...message, outputTaskIds } : message
+		),
+		rounds: conversation.rounds.map((item) => (item.id === roundId ? { ...item, outputTaskIds } : item)),
+		updatedAt: now
+	};
+}
+
 export function markAgentRoundCanceled(
 	conversation: AgentConversation,
 	roundId: string,
@@ -325,7 +365,14 @@ function normalizeAgentRounds(value: unknown): AgentRound[] {
 		assistantMessageId: getNullableString(item.assistantMessageId),
 		prompt: getString(item.prompt, ''),
 		outputTaskIds: normalizeStringArray(item.outputTaskIds),
-		status: item.status === 'done' || item.status === 'error' || item.status === 'canceled' ? item.status : 'running',
+		status:
+			item.status === 'done' ||
+			item.status === 'partial' ||
+			item.status === 'needs-action' ||
+			item.status === 'error' ||
+			item.status === 'canceled'
+				? item.status
+				: 'running',
 		error: getNullableString(item.error),
 		responseId: getNullableString(item.responseId),
 		rawResponsePayload: getNullableString(item.rawResponsePayload),
@@ -335,6 +382,10 @@ function normalizeAgentRounds(value: unknown): AgentRound[] {
 		webSearchEnabled: getBoolean(item.webSearchEnabled, false),
 		retryOfRoundId: getNullableString(item.retryOfRoundId),
 		continuedFromRoundId: getNullableString(item.continuedFromRoundId),
+		intent: normalizeAgentRoundIntent(item.intent),
+		executionRoute: normalizeAgentExecutionRoute(item.executionRoute),
+		imageProfileId: getNullableString(item.imageProfileId),
+		protocolWarning: getNullableString(item.protocolWarning),
 		createdAt: getNumber(item.createdAt, Date.now()),
 		finishedAt: getNullableNumber(item.finishedAt)
 	}));
@@ -348,6 +399,16 @@ function normalizeToolCalls(value: unknown): AgentToolCallSummary[] {
 		status: getNullableString(item.status),
 		title: getNullableString(item.title)
 	}));
+}
+
+function normalizeAgentRoundIntent(value: unknown): AgentRoundIntent {
+	if (value === 'image-generate' || value === 'image-edit') return value;
+	return 'conversation';
+}
+
+function normalizeAgentExecutionRoute(value: unknown): AgentExecutionRoute {
+	if (value === 'native-image-tool' || value === 'image-profile') return value;
+	return 'responses';
 }
 
 function createConversationTitle(prompt: string) {

@@ -1,4 +1,7 @@
 <script lang="ts">
+	import GalleryDataSettings from './GalleryDataSettings.svelte';
+	import GalleryPreferencesSettings from './GalleryPreferencesSettings.svelte';
+	import { getTaskOutputCount } from '$lib/domain/task-media';
 	import {
 		Bot,
 		ChevronDown,
@@ -14,6 +17,7 @@
 		SlidersHorizontal,
 		Trash2,
 		Upload,
+		Workflow,
 		X
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -68,6 +72,7 @@
 	import { getProviderCapabilities } from '$lib/domain/provider-capabilities';
 	import { getImageApiProtocolWarning, resolveImageApiEndpoint } from '$lib/api/providers/registry';
 	import SettingSwitch from './SettingSwitch.svelte';
+	import WorkspaceRoutingSettings from './WorkspaceRoutingSettings.svelte';
 	import {
 		formatLoadedTaskCount,
 		formatStorageBytes,
@@ -104,24 +109,13 @@
 		onRequestTasksStorageBytes?: () => void;
 	} = $props();
 
-	let activeTab = $state<'general' | 'api' | 'agent' | 'data' | 'about'>('api');
-	let includeApiKeys = $state(false);
-	let importError = $state<string | null>(null);
-	let importSuccess = $state<string | null>(null);
-	let taskImportError = $state<string | null>(null);
-	let taskImportSuccess = $state<string | null>(null);
-	let cleanupError = $state<string | null>(null);
-	let cleanupSuccess = $state<string | null>(null);
-	let isCleaningImages = $state(false);
+	let activeTab = $state<'general' | 'api' | 'workspace' | 'agent' | 'data' | 'about'>('api');
+	let settingsScrollViewport = $state<HTMLDivElement>();
 	let pendingDeleteProfileId = $state<string | null>(null);
 	let pendingDeleteCustomProviderId = $state<string | null>(null);
 	let customProviderJson = $state('');
 	let customProviderError = $state<string | null>(null);
 	let customProviderSuccess = $state<string | null>(null);
-	let showClearTasksDialog = $state(false);
-	let importInput = $state<HTMLInputElement>();
-	let taskImportInput = $state<HTMLInputElement>();
-	let fullBackupImportInput = $state<HTMLInputElement>();
 	let appVersion = $state(packageInfo.version);
 	let isCheckingUpdate = $state(false);
 	let updateCheckResult = $state<UpdateCheckResult | null>(null);
@@ -131,15 +125,12 @@
 	let activeCapabilities = $derived(getProviderCapabilities(activeProfile, settings));
 	let activeProtocolOptions = $derived(getAvailableImageApiProtocols(activeProfile.provider));
 	let activeEndpointPreview = $derived(getProfileEndpointPreview(activeProfile));
+	let activeEditEndpointPreview = $derived(getProfileEndpointPreview(activeProfile, 'edit'));
 	let activeProfileBlockReason = $derived(getProfileRequestBlockReason(activeProfile, settings));
 	let activeProtocolWarning = $derived(getImageApiProtocolWarning(activeProfile));
 	let isUsingOfficialConnection = $derived(isOfficialConnection(activeProfile));
 	let taskCountLabel = $derived(formatLoadedTaskCount(tasks.length, totalTaskCount));
 	let taskStorageEstimateLabel = $derived(getTaskStorageEstimateLabel(tasks.length, totalTaskCount));
-
-	$effect(() => {
-		if (!tasks.length) showClearTasksDialog = false;
-	});
 
 	$effect(() => {
 		if (!open) return;
@@ -159,7 +150,6 @@
 	});
 
 	function close() {
-		showClearTasksDialog = false;
 		open = false;
 	}
 
@@ -211,14 +201,31 @@
 
 	function switchProfile(profileId: string) {
 		pendingDeleteProfileId = null;
-		showClearTasksDialog = false;
 		settings = normalizeSettings({ ...settings, activeProfileId: profileId });
 	}
 
 	function createProfile() {
 		pendingDeleteProfileId = null;
-		showClearTasksDialog = false;
 		settings = addOpenAIProfile(settings);
+	}
+
+	function createResponsesProfile() {
+		pendingDeleteProfileId = null;
+		const nextSettings = addOpenAIProfile(settings);
+		settings = normalizeSettings({
+			...nextSettings,
+			profiles: nextSettings.profiles.map((profile) =>
+				profile.id === nextSettings.activeProfileId
+					? {
+							...profile,
+							name: 'OpenAI Responses',
+							apiMode: 'responses',
+							apiProtocol: 'openai-responses',
+							model: DEFAULT_RESPONSES_MODEL
+						}
+					: profile
+			)
+		});
 	}
 
 	function createBuiltInProfile(provider: 'xai' | 'google') {
@@ -227,13 +234,11 @@
 
 	function createProfileForProvider(provider: ApiProvider) {
 		pendingDeleteProfileId = null;
-		showClearTasksDialog = false;
 		settings = addApiProfile(settings, provider);
 	}
 
 	function copyProfile() {
 		pendingDeleteProfileId = null;
-		showClearTasksDialog = false;
 		settings = duplicateProfile(settings, activeProfile.id);
 	}
 
@@ -264,19 +269,6 @@
 		const provider = (event.currentTarget as HTMLSelectElement).value as ApiProvider;
 		const customProvider = settings.customProviders.find((item) => item.id === provider) ?? null;
 		updateActiveProfile(switchApiProfileProvider(activeProfile, provider, customProvider));
-	}
-
-	function updateAgentMaxToolRounds(event: Event) {
-		updateSettings({
-			agentMaxToolRounds: normalizeAgentMaxToolRounds((event.currentTarget as HTMLInputElement).value)
-		});
-	}
-
-	function toggleZipDownloadRoute(route: ZipDownloadRoute) {
-		const current = new Set(settings.zipDownloadRoutes);
-		if (current.has(route)) current.delete(route);
-		else current.add(route);
-		updateSettings({ zipDownloadRoutes: normalizeZipDownloadRoutes([...current]) });
 	}
 
 	function updateApiProtocol(event: Event) {
@@ -332,14 +324,19 @@
 		);
 	}
 
-	function getProfileEndpointPreview(profile: ApiProfile): { method: string; url: string } | null {
-		const builtInEndpoint = resolveImageApiEndpoint(profile);
+	function getProfileEndpointPreview(
+		profile: ApiProfile,
+		operation: 'generate' | 'edit' = 'generate'
+	): { method: string; url: string } | null {
+		const builtInEndpoint = resolveImageApiEndpoint(profile, operation);
 		if (builtInEndpoint) return { method: 'POST', url: builtInEndpoint };
 		const customProvider = settings.customProviders.find((provider) => provider.id === profile.provider);
 		if (!customProvider) return null;
+		const mapping = operation === 'edit' ? customProvider.editSubmit : customProvider.submit;
+		if (!mapping) return null;
 		return {
-			method: customProvider.submit.method ?? 'POST',
-			url: buildApiUrl(profile.baseUrl, customProvider.submit.path)
+			method: mapping.method ?? 'POST',
+			url: buildApiUrl(profile.baseUrl, mapping.path)
 		};
 	}
 
@@ -387,126 +384,9 @@
 		return name.trim() || '未命名配置';
 	}
 
-	function updateReferenceImageEditAction(event: Event) {
-		updateSettings({
-			referenceImageEditAction: (event.currentTarget as HTMLSelectElement).value as ReferenceImageEditAction
-		});
-	}
-
-	function requestNotificationPermission() {
-		if (typeof Notification === 'undefined') return;
-		void Notification.requestPermission().then((permission) => {
-			updateSettings({ taskCompletionNotification: permission === 'granted' });
-		});
-	}
-
-	function exportSettings() {
-		const payload = buildExportedSettings(settings, includeApiKeys);
-		const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-		void saveBlobToFile(blob, 'imageport-settings.json')
-			.then((saved) => {
-				if (saved) toast.success('设置已导出', { description: includeApiKeys ? '已包含 API Key' : '未包含 API Key' });
-			})
-			.catch((err) => {
-				importError = `导出失败：${err instanceof Error ? err.message : String(err)}`;
-				toast.error('设置导出失败', { description: importError });
-			});
-	}
-
-	function openImportPicker() {
-		importInput?.click();
-	}
-
-	function openTaskImportPicker() {
-		taskImportInput?.click();
-	}
-
-	function openFullBackupImportPicker() {
-		fullBackupImportInput?.click();
-	}
-
-	async function importSettings(event: Event) {
-		showClearTasksDialog = false;
-		importError = null;
-		importSuccess = null;
-		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0];
-		input.value = '';
-		if (!file) return;
-		try {
-			settings = parseImportedSettings(await file.text());
-			importSuccess = '设置已导入';
-			toast.success('设置已导入');
-		} catch (err) {
-			importError = err instanceof Error ? err.message : String(err);
-			toast.error('设置导入失败', { description: importError });
-		}
-	}
-
-	async function importTasks(event: Event) {
-		showClearTasksDialog = false;
-		taskImportError = null;
-		taskImportSuccess = null;
-		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0];
-		input.value = '';
-		if (!file) return;
-		try {
-			const summary = await onImportTasks(file);
-			taskImportSuccess = `已导入 ${summary.addedCount} 个任务，跳过 ${summary.skippedDuplicateCount} 个重复任务`;
-		} catch (err) {
-			taskImportError = err instanceof Error ? err.message : String(err);
-			toast.error('任务导入失败', { description: taskImportError });
-		}
-	}
-
-	async function importFullBackup(event: Event) {
-		showClearTasksDialog = false;
-		taskImportError = null;
-		taskImportSuccess = null;
-		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0];
-		input.value = '';
-		if (!file) return;
-		try {
-			const summary = await onImportFullBackup(file);
-			taskImportSuccess = `完整备份已恢复：新增 ${summary.addedCount} 个任务，跳过 ${summary.skippedDuplicateCount} 个重复任务`;
-		} catch (err) {
-			taskImportError = err instanceof Error ? err.message : String(err);
-			toast.error('完整备份恢复失败', { description: taskImportError });
-		}
-	}
-
-	function clearTasks() {
-		if (!tasks.length) return;
-		taskImportSuccess = null;
-		showClearTasksDialog = false;
-		onClearTasks();
-	}
-
-	async function cleanupImages() {
-		showClearTasksDialog = false;
-		cleanupError = null;
-		cleanupSuccess = null;
-		isCleaningImages = true;
-		try {
-			const result = await onCleanupImages();
-			cleanupSuccess =
-				result.removedCount > 0
-					? `已清理 ${result.removedCount} 个无引用图片文件${result.failedCount ? `，${result.failedCount} 个文件清理失败` : ''}`
-					: result.failedCount
-						? `${result.failedCount} 个无引用图片文件清理失败`
-						: '没有发现需要清理的图片文件';
-		} catch (err) {
-			cleanupError = err instanceof Error ? err.message : String(err);
-			toast.error('图片清理失败', { description: cleanupError });
-		} finally {
-			isCleaningImages = false;
-		}
-	}
-
 	function getTabTitle() {
 		if (activeTab === 'api') return 'API 配置';
+		if (activeTab === 'workspace') return '模型分工';
 		if (activeTab === 'general') return '通用设置';
 		if (activeTab === 'agent') return 'Agent 配置';
 		if (activeTab === 'about') return '关于';
@@ -514,22 +394,13 @@
 	}
 
 	function getTabDescription() {
-		if (activeTab === 'api')
-			return '请求通过 Tauri 后端发送，支持 OpenAI-compatible Images、Responses 和自定义 HTTP 图像服务商。';
+		if (activeTab === 'api') return '管理图片生成、编辑与 Agent 推理使用的 API 连接。';
 		if (activeTab === 'general') return '控制输入、通知、复用和任务提交习惯。';
+		if (activeTab === 'workspace') return '分别指定画廊图片生成、Agent 推理与图片执行使用的连接。';
 		if (activeTab === 'agent') return 'Agent Workspace 使用 OpenAI Responses API，生成图片会落到 Gallery 任务。';
 		if (activeTab === 'about') return '应用版本、数据说明和当前能力边界。';
-		return '导入导出设置和任务，配置 ZIP 下载策略，或清空当前任务列表。';
+		return '导入导出设置和任务，配置 ZIP 下载策略，或清空全部历史任务。';
 	}
-
-	const zipRouteOptions: Array<{ route: ZipDownloadRoute; label: string; description: string }> = [
-		{ route: 'task-card', label: '任务卡片', description: '任务卡片和更多菜单里的整任务下载。' },
-		{ route: 'task-detail-all', label: '详情页全部', description: '任务详情页下载全部输出图。' },
-		{ route: 'task-selection', label: '批量选择', description: '选择多个任务后下载 ZIP。' },
-		{ route: 'lightbox', label: '大图预览', description: 'Lightbox 内的批量下载入口。' },
-		{ route: 'favorite-collection-selection', label: '收藏集合', description: '收藏集合视图中的批量下载。' },
-		{ route: 'agent-round-all', label: 'Agent 轮次', description: 'Agent 某轮回复关联图片的批量下载。' }
-	];
 
 	const defaultCustomProviderExample = JSON.stringify(
 		{
@@ -610,6 +481,14 @@
 						API 配置
 					</Button>
 					<Button
+						variant={activeTab === 'workspace' ? 'secondary' : 'ghost'}
+						class="justify-start"
+						onclick={() => (activeTab = 'workspace')}
+					>
+						<Workflow class="size-4" />
+						模型分工
+					</Button>
+					<Button
 						variant={activeTab === 'agent' ? 'secondary' : 'ghost'}
 						class="justify-start"
 						onclick={() => (activeTab = 'agent')}
@@ -641,20 +520,18 @@
 					<h3 class="text-sm font-semibold">
 						{getTabTitle()}
 					</h3>
-					{#if activeTab !== 'api'}
-						<p class="text-muted-foreground mt-1 text-xs">
-							{getTabDescription()}
-						</p>
-					{/if}
+					<p class="text-muted-foreground mt-1 text-xs">
+						{getTabDescription()}
+					</p>
 				</header>
 
-				<div class="min-h-0 flex-1 overflow-y-auto p-5">
+				<div bind:this={settingsScrollViewport} class="min-h-0 flex-1 overflow-y-auto p-5">
 					{#if activeTab === 'api'}
 						<div class="grid gap-4">
 							<section class="rounded-lg border bg-muted/20 p-3">
 								<div class="mb-3 flex items-center justify-between gap-3">
 									<div class="flex items-center gap-2">
-										<h4 class="text-sm font-semibold">API 连接</h4>
+										<h4 class="text-sm font-semibold">图片与推理 Profile</h4>
 										<span
 											class="text-muted-foreground rounded-full border bg-background px-1.5 py-0.5 text-[10px] tabular-nums"
 										>
@@ -666,15 +543,21 @@
 											<DropdownMenu.Trigger>
 												<Button type="button" variant="outline" size="sm">
 													<Plus class="size-4" />
-													添加连接
+													添加 Profile
 													<ChevronDown class="text-muted-foreground size-3.5" />
 												</Button>
 											</DropdownMenu.Trigger>
 											<DropdownMenu.Content align="end" class="w-64">
 												<DropdownMenu.Item class="items-start py-2.5" onclick={createProfile}>
 													<div class="grid gap-0.5">
-														<span class="font-medium">OpenAI 兼容</span>
-														<span class="text-muted-foreground text-xs">Images / Responses</span>
+														<span class="font-medium">OpenAI 图片</span>
+														<span class="text-muted-foreground text-xs">Images · GPT Image</span>
+													</div>
+												</DropdownMenu.Item>
+												<DropdownMenu.Item class="items-start py-2.5" onclick={createResponsesProfile}>
+													<div class="grid gap-0.5">
+														<span class="font-medium">OpenAI 文字与推理</span>
+														<span class="text-muted-foreground text-xs">Responses · 剧本 / Agent</span>
 													</div>
 												</DropdownMenu.Item>
 												<DropdownMenu.Item class="items-start py-2.5" onclick={() => createBuiltInProfile('xai')}>
@@ -686,7 +569,7 @@
 												<DropdownMenu.Item class="items-start py-2.5" onclick={() => createBuiltInProfile('google')}>
 													<div class="grid gap-0.5">
 														<span class="font-medium">Google 官方</span>
-														<span class="text-muted-foreground text-xs">Gemini Interactions</span>
+														<span class="text-muted-foreground text-xs">Interactions / generateContent</span>
 													</div>
 												</DropdownMenu.Item>
 												{#if settings.customProviders.length}
@@ -718,7 +601,7 @@
 									</div>
 								</div>
 
-								<div class="grid gap-2">
+								<div class="grid max-h-72 gap-2 overflow-y-auto pr-1" aria-label="图片与推理 Profile 列表">
 									{#each settings.profiles as profile}
 										<div
 											class={`flex items-center gap-2 rounded-lg border px-2 py-2 ${profile.id === activeProfile.id ? 'border-primary/35 bg-primary/5' : 'bg-background/70'}`}
@@ -739,7 +622,7 @@
 											{#if profile.id === activeProfile.id}
 												<span
 													class="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-xs text-primary"
-													>当前</span
+													>编辑中</span
 												>
 											{/if}
 											<Button
@@ -837,14 +720,27 @@
 								<div class="sm:col-span-2 rounded-lg border bg-muted/25 p-3">
 									<div class="flex items-start justify-between gap-3">
 										<div class="min-w-0">
-											<div class="text-muted-foreground text-xs font-medium">实际生成请求</div>
+											<div class="text-muted-foreground text-xs font-medium">请求地址预览</div>
 											{#if activeEndpointPreview}
+												<p class="text-muted-foreground mt-2 text-xs">
+													{activeEditEndpointPreview?.url === activeEndpointPreview.url &&
+													activeEditEndpointPreview?.method === activeEndpointPreview.method
+														? '文生图 / 参考图编辑'
+														: '无参考图'}
+												</p>
 												<code class="mt-1 block break-all text-xs leading-relaxed">
 													{activeEndpointPreview.method}
 													{activeEndpointPreview.url}
 												</code>
 											{:else}
 												<p class="mt-1 text-xs">当前配置没有可预览的请求地址。</p>
+											{/if}
+											{#if activeEditEndpointPreview && (activeEditEndpointPreview.url !== activeEndpointPreview?.url || activeEditEndpointPreview.method !== activeEndpointPreview?.method)}
+												<p class="text-muted-foreground mt-3 text-xs">有参考图（无需遮罩）</p>
+												<code class="mt-1 block break-all text-xs leading-relaxed">
+													{activeEditEndpointPreview.method}
+													{activeEditEndpointPreview.url}
+												</code>
 											{/if}
 										</div>
 										{#if isBuiltInProfileProvider(activeProfile.provider)}
@@ -1002,301 +898,26 @@
 								</div>
 							</section>
 						</div>
-					{:else if activeTab === 'general'}
-						<div class="grid gap-3">
-							<SettingSwitch
-								title="复用任务时临时使用原配置"
-								description="复用历史任务时，如果原 API 配置还存在，会优先用原配置生成。"
-								checked={settings.reuseTaskApiProfileTemporarily}
-								onToggle={() =>
-									updateSettings({ reuseTaskApiProfileTemporarily: !settings.reuseTaskApiProfileTemporarily })}
-							/>
-							<SettingSwitch
-								title="总是显示重试按钮"
-								description="任务失败或部分完成时保持复用/重试入口可见。"
-								checked={settings.alwaysShowRetryButton}
-								onToggle={() => updateSettings({ alwaysShowRetryButton: !settings.alwaysShowRetryButton })}
-							/>
-							<SettingSwitch
-								title="生成后清空输入"
-								description="提交任务后清空提示词、参考图和遮罩。"
-								checked={settings.clearInputAfterSubmit}
-								onToggle={() => updateSettings({ clearInputAfterSubmit: !settings.clearInputAfterSubmit })}
-							/>
-							<SettingSwitch
-								title="重启后保留输入草稿"
-								description="保存提示词、参数、参考图和遮罩草稿。"
-								checked={settings.persistInputOnRestart}
-								onToggle={() => updateSettings({ persistInputOnRestart: !settings.persistInputOnRestart })}
-							/>
-							<SettingSwitch
-								title="Enter 发送"
-								description="开启后 Enter 发送，Shift + Enter 换行；关闭后 Ctrl/Command + Enter 暂未接入。"
-								checked={settings.enterSubmit}
-								onToggle={() => updateSettings({ enterSubmit: !settings.enterSubmit })}
-							/>
-							<SettingSwitch
-								title="任务完成通知"
-								description="生成完成时发送系统通知。首次开启会请求浏览器通知权限。"
-								checked={settings.taskCompletionNotification}
-								onToggle={() =>
-									settings.taskCompletionNotification
-										? updateSettings({ taskCompletionNotification: false })
-										: requestNotificationPermission()}
-							/>
-							<label class="block space-y-1.5 rounded-lg border bg-muted/25 p-3">
-								<span class="text-sm font-medium">参考图编辑默认行为</span>
-								<Select
-									value={settings.referenceImageEditAction}
-									name="referenceImageEditAction"
-									onchange={updateReferenceImageEditAction}
-								>
-									<option value="ask">每次询问</option>
-									<option value="add-mask">添加遮罩</option>
-									<option value="replace-reference">替换参考图</option>
-								</Select>
-								<span class="text-muted-foreground text-xs"
-									>遮罩编辑会直接打开画笔；替换参考图会清空旧参考图后添加当前图。</span
-								>
-							</label>
-						</div>
-					{:else if activeTab === 'agent'}
-						<div class="grid gap-3">
-							<label class="block space-y-1.5 rounded-lg border bg-muted/25 p-3">
-								<span class="text-sm font-medium">最大工具轮数</span>
-								<Input
-									value={settings.agentMaxToolRounds}
-									name="agentMaxToolRounds"
-									type="number"
-									min="1"
-									max="50"
-									oninput={updateAgentMaxToolRounds}
-								/>
-								<span class="text-muted-foreground text-xs"
-									>默认 15，范围 1-50。用于限制 Agent 连续调用工具，避免无限循环。</span
-								>
-							</label>
-							<SettingSwitch
-								title="Agent 回复后自动滚动到底部"
-								description="发送消息、收到文字流或 partial 图片时保持最新内容可见。"
-								checked={settings.agentAutoScroll}
-								onToggle={() => updateSettings({ agentAutoScroll: !settings.agentAutoScroll })}
-							/>
-							<SettingSwitch
-								title="允许 Agent 使用 Web Search"
-								description="向 Responses 请求加入 hosted Web Search 工具，让 Agent 可按需检索网页信息。"
-								checked={settings.agentWebSearch}
-								onToggle={() => updateSettings({ agentWebSearch: !settings.agentWebSearch })}
-							/>
-							<div class="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs leading-relaxed text-blue-800">
-								Agent 当前需要 OpenAI 服务商 + Responses API 配置。会话会持久化到 SQLite，图片结果会同步成为 Gallery
-								任务。
-							</div>
-						</div>
+					{:else if activeTab === 'workspace'}
+						<WorkspaceRoutingSettings
+							{settings}
+							onSettingsChange={(nextSettings) => (settings = normalizeSettings(nextSettings))}
+						/>
+					{:else if activeTab === 'general' || activeTab === 'agent'}
+						<GalleryPreferencesSettings section={activeTab} bind:settings />
 					{:else if activeTab === 'data'}
-						<div class="grid gap-4">
-							<section class="rounded-lg border bg-muted/20 p-4">
-								<h4 class="text-sm font-semibold">ZIP 下载策略</h4>
-								<p class="text-muted-foreground mt-1 text-xs">控制哪些入口默认以 ZIP 方式下载多张图片。</p>
-								<div class="mt-3 grid gap-2 sm:grid-cols-2">
-									{#each zipRouteOptions as option}
-										<SettingSwitch
-											title={option.label}
-											description={option.description}
-											checked={settings.zipDownloadRoutes.includes(option.route)}
-											onToggle={() => toggleZipDownloadRoute(option.route)}
-										/>
-									{/each}
-								</div>
-							</section>
-							<section class="rounded-lg border bg-muted/20 p-4">
-								<div class="flex items-start justify-between gap-4">
-									<div>
-										<h4 class="text-sm font-semibold">完整备份 ZIP</h4>
-										<p class="text-muted-foreground mt-1 text-xs">
-											导出设置、当前已加载任务和对应图片文件；恢复时默认合并导入，不覆盖现有任务。
-										</p>
-									</div>
-									<div class="flex shrink-0 gap-2">
-										<Button onclick={onExportFullBackup} disabled={!tasks.length}>
-											<Download class="size-4" />
-											备份
-										</Button>
-										<Button variant="outline" onclick={openFullBackupImportPicker}>
-											<Upload class="size-4" />
-											恢复
-										</Button>
-									</div>
-								</div>
-								<input
-									bind:this={fullBackupImportInput}
-									type="file"
-									accept="application/zip,.zip"
-									class="hidden"
-									onchange={importFullBackup}
-								/>
-							</section>
-
-							<section class="rounded-lg border bg-muted/20 p-4">
-								<h4 class="text-sm font-semibold">数据库诊断</h4>
-								<div class="mt-3 grid grid-cols-3 gap-3 text-xs">
-									<div class="rounded-lg border bg-background/70 p-3">
-										<div class="text-muted-foreground">已加载任务</div>
-										<div class="mt-1 font-medium">{taskCountLabel}</div>
-									</div>
-									<div class="rounded-lg border bg-background/70 p-3">
-										<div class="text-muted-foreground">输出图</div>
-										<div class="mt-1 font-medium">{tasks.reduce((total, task) => total + task.images.length, 0)}</div>
-									</div>
-									<div class="rounded-lg border bg-background/70 p-3">
-										<div class="text-muted-foreground">{taskStorageEstimateLabel}</div>
-										<div class="mt-1 font-medium">{formatStorageBytes(tasksStorageBytes)}</div>
-									</div>
-								</div>
-								<p class="text-muted-foreground mt-3 text-xs">
-									更深入的丢失文件扫描会在完整数据管理阶段继续增强；当前不会自动删除任何历史图片。
-								</p>
-							</section>
-
-							<section class="rounded-lg border bg-muted/20 p-4">
-								<div class="flex items-start justify-between gap-4">
-									<div>
-										<h4 class="text-sm font-semibold">导出设置</h4>
-										<p class="text-muted-foreground mt-1 text-xs">导出当前设置 JSON。默认不包含 API Key。</p>
-									</div>
-									<Button onclick={exportSettings}>
-										<Download class="size-4" />
-										导出
-									</Button>
-								</div>
-								<label class="mt-3 flex items-center gap-2 text-xs">
-									<input bind:checked={includeApiKeys} type="checkbox" class="size-4" />
-									<span>包含 API Key</span>
-								</label>
-							</section>
-
-							<section class="rounded-lg border bg-muted/20 p-4">
-								<div class="flex items-start justify-between gap-4">
-									<div>
-										<h4 class="text-sm font-semibold">导入设置</h4>
-										<p class="text-muted-foreground mt-1 text-xs">支持导入 ImagePort 设置 JSON，兼容旧版单配置字段。</p>
-										{#if importError}
-											<p class="mt-2 text-xs text-destructive">{importError}</p>
-										{/if}
-										{#if importSuccess}
-											<p class="mt-2 text-xs text-emerald-700">{importSuccess}</p>
-										{/if}
-									</div>
-									<Button variant="outline" onclick={openImportPicker}>
-										<Upload class="size-4" />
-										导入
-									</Button>
-								</div>
-								<input
-									bind:this={importInput}
-									type="file"
-									accept="application/json,.json"
-									class="hidden"
-									onchange={importSettings}
-								/>
-							</section>
-
-							<section class="rounded-lg border bg-muted/20 p-4">
-								<div class="flex items-start justify-between gap-4">
-									<div>
-										<h4 class="text-sm font-semibold">导出任务</h4>
-										<p class="text-muted-foreground mt-1 text-xs">
-											导出当前已加载的 {tasks.length} 个任务，包含生成图片 data URL。
-										</p>
-										<p class={`mt-1 text-xs ${getStorageBytesTone(tasksStorageBytes)}`}>
-											已加载任务导出 JSON 约 {formatStorageBytes(tasksStorageBytes)}。图片较多时建议定期导出并清理。
-										</p>
-									</div>
-									<Button onclick={onExportTasks} disabled={!tasks.length}>
-										<Download class="size-4" />
-										导出任务
-									</Button>
-								</div>
-							</section>
-
-							<section class="rounded-lg border bg-muted/20 p-4">
-								<div class="flex items-start justify-between gap-4">
-									<div>
-										<h4 class="text-sm font-semibold">导入任务</h4>
-										<p class="text-muted-foreground mt-1 text-xs">导入 ImagePort 任务 JSON，重复 ID 会自动跳过。</p>
-										{#if taskImportError}
-											<p class="mt-2 text-xs text-destructive">{taskImportError}</p>
-										{/if}
-										{#if taskImportSuccess}
-											<p class="mt-2 text-xs text-emerald-700">{taskImportSuccess}</p>
-										{/if}
-									</div>
-									<Button variant="outline" onclick={openTaskImportPicker}>
-										<Upload class="size-4" />
-										导入任务
-									</Button>
-								</div>
-								<input
-									bind:this={taskImportInput}
-									type="file"
-									accept="application/json,.json"
-									class="hidden"
-									onchange={importTasks}
-								/>
-							</section>
-
-							<section class="rounded-lg border bg-muted/20 p-4">
-								<div class="flex items-start justify-between gap-4">
-									<div>
-										<h4 class="text-sm font-semibold">清理图片文件</h4>
-										<p class="text-muted-foreground mt-1 text-xs">
-											扫描 AppLocalData 中不再被当前任务引用的输出图、缩略图、参考图和遮罩。
-										</p>
-										{#if cleanupError}
-											<p class="mt-2 text-xs text-destructive">{cleanupError}</p>
-										{/if}
-										{#if cleanupSuccess}
-											<p class="mt-2 text-xs text-emerald-700">{cleanupSuccess}</p>
-										{/if}
-									</div>
-									<Button variant="outline" onclick={cleanupImages} disabled={isCleaningImages}>
-										<Trash2 class="size-4" />
-										{isCleaningImages ? '清理中' : '清理图片'}
-									</Button>
-								</div>
-							</section>
-
-							<section class="rounded-lg border border-destructive/25 bg-destructive/5 p-4">
-								<div class="flex items-start justify-between gap-4">
-									<div>
-										<h4 class="text-sm font-semibold text-destructive">清空任务</h4>
-										<p class="text-muted-foreground mt-1 text-xs">
-											当前任务：{tasks.length} 个。此操作不会清除 API 配置。
-										</p>
-									</div>
-									<AlertDialog.Root bind:open={showClearTasksDialog}>
-										<AlertDialog.Trigger>
-											<Button variant="destructive" disabled={!tasks.length}>
-												<Trash2 class="size-4" />
-												清空
-											</Button>
-										</AlertDialog.Trigger>
-										<AlertDialog.Content>
-											<AlertDialog.Header>
-												<AlertDialog.Title>清空全部任务？</AlertDialog.Title>
-												<AlertDialog.Description>
-													将删除当前 {tasks.length} 个任务及其本地图片文件，但不会清除 API 配置。此操作不可恢复。
-												</AlertDialog.Description>
-											</AlertDialog.Header>
-											<AlertDialog.Footer>
-												<AlertDialog.Cancel>取消</AlertDialog.Cancel>
-												<AlertDialog.Action onclick={clearTasks}>确认清空</AlertDialog.Action>
-											</AlertDialog.Footer>
-										</AlertDialog.Content>
-									</AlertDialog.Root>
-								</div>
-							</section>
-						</div>
+						<GalleryDataSettings
+							bind:settings
+							{tasks}
+							{totalTaskCount}
+							{tasksStorageBytes}
+							{onExportTasks}
+							{onExportFullBackup}
+							{onImportTasks}
+							{onImportFullBackup}
+							{onClearTasks}
+							{onCleanupImages}
+						/>
 					{:else if activeTab === 'about'}
 						<div class="grid gap-4">
 							<section class="rounded-lg border bg-muted/20 p-4">

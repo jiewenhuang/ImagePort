@@ -9,7 +9,9 @@ import {
 	importCustomProviderDefinitionFromJson,
 	getProfileRequestBlockReason,
 	getTaskReuseProfile,
+	getWorkspaceProfile,
 	removeCustomProvider,
+	normalizeAgentImageRoutingStrategy,
 	normalizeAgentMaxToolRounds,
 	normalizeSettings,
 	normalizeZipDownloadRoutes,
@@ -36,10 +38,15 @@ describe('normalizeSettings', () => {
 		expect(settings.agentMaxToolRounds).toBe(15);
 		expect(settings.agentAutoScroll).toBe(true);
 		expect(settings.agentWebSearch).toBe(false);
+		expect(settings.agentImageRoutingStrategy).toBe('auto');
 		expect(settings.zipDownloadRoutes.includes('task-detail-all')).toBe(true);
 		expect(settings.favoriteCollections[0].id).toBe('favorites-default');
 		expect(settings.activeFavoriteCollectionId).toBe(null);
 		expect(settings.customProviders).toEqual([]);
+		expect(settings.workspaceRouting.galleryProfileId).toBe(DEFAULT_SETTINGS.activeProfileId);
+		expect(settings.workspaceRouting.agentImageProfileId).toBe(null);
+		expect(getWorkspaceProfile(settings, 'agent-image').id).toBe(DEFAULT_SETTINGS.activeProfileId);
+		expect(settings.schemaVersion).toBe(2);
 	});
 
 	test('migrates legacy single-profile fields', () => {
@@ -84,6 +91,7 @@ describe('normalizeSettings', () => {
 			agentMaxToolRounds: 999,
 			agentAutoScroll: false,
 			agentWebSearch: true,
+			agentImageRoutingStrategy: 'profile',
 			favoriteCollections: [{ id: 'work', name: 'Work', createdAt: 10, updatedAt: 20 }],
 			activeFavoriteCollectionId: 'work'
 		});
@@ -102,8 +110,44 @@ describe('normalizeSettings', () => {
 		expect(settings.agentMaxToolRounds).toBe(50);
 		expect(settings.agentAutoScroll).toBe(false);
 		expect(settings.agentWebSearch).toBe(true);
+		expect(settings.agentImageRoutingStrategy).toBe('profile');
 		expect(settings.favoriteCollections.map((item) => item.id)).toEqual(['favorites-default', 'work']);
 		expect(settings.activeFavoriteCollectionId).toBe('work');
+	});
+});
+
+describe('workspace routing', () => {
+	test('keeps Gallery and Agent profile routes independent', () => {
+		const settings = normalizeSettings({
+			profiles: [
+				{ ...DEFAULT_SETTINGS.profiles[0], id: 'gallery', model: 'image-model' },
+				{
+					...DEFAULT_SETTINGS.profiles[0],
+					id: 'agent',
+					model: 'reasoning-model',
+					apiMode: 'responses',
+					apiProtocol: 'openai-responses'
+				}
+			],
+			workspaceRouting: {
+				galleryProfileId: 'gallery',
+				agentProfileId: 'agent',
+				agentImageProfileId: 'gallery',
+				studioScriptProfileId: 'agent',
+				studioImageProfileId: 'gallery',
+				studioVideoModelId: 'happyhorse-1.1'
+			}
+		});
+
+		expect(getWorkspaceProfile(settings, 'gallery').id).toBe('gallery');
+		expect(getWorkspaceProfile(settings, 'agent').id).toBe('agent');
+		expect(getWorkspaceProfile(settings, 'agent-image').id).toBe('gallery');
+	});
+
+	test('normalizes Agent image routing strategy values', () => {
+		expect(normalizeAgentImageRoutingStrategy('native')).toBe('native');
+		expect(normalizeAgentImageRoutingStrategy('profile')).toBe('profile');
+		expect(normalizeAgentImageRoutingStrategy('unsupported')).toBe('auto');
 	});
 });
 
@@ -215,6 +259,28 @@ describe('provider settings', () => {
 		expect(settings.profiles[0].provider).toBe('google');
 		expect(settings.profiles[0].apiProtocol).toBe('openai-images');
 		expect(settings.profiles[0].baseUrl).toBe('https://gateway.example.com/v1');
+	});
+
+	test('preserves generateContent in saved profiles and provider drafts', () => {
+		for (const apiProtocol of ['gemini-generate-content', 'gemini-generate-content-response-format'] as const) {
+			const settings = normalizeSettings({
+				profiles: [
+					{
+						...DEFAULT_SETTINGS.profiles[0],
+						provider: 'google',
+						apiProtocol,
+						baseUrl: 'https://gateway.example.com/v1beta',
+						model: 'gemini-nano-banana-2.1',
+						providerDrafts: { google: { apiProtocol } }
+					}
+				]
+			});
+			const restored = normalizeSettings(JSON.parse(JSON.stringify(settings)));
+			expect(restored.profiles[0].apiProtocol).toBe(apiProtocol);
+			expect(restored.profiles[0].providerDrafts?.google?.apiProtocol).toBe(apiProtocol);
+			expect(restored.profiles[0].baseUrl).toBe('https://gateway.example.com/v1beta');
+			expect(restored.profiles[0].model).toBe('gemini-nano-banana-2.1');
+		}
 	});
 
 	test('migrates legacy profiles to their provider-native protocols', () => {
@@ -333,6 +399,11 @@ describe('serializeSettingsForExport', () => {
 	test('omits api keys unless requested', () => {
 		const settings: AppSettings = normalizeSettings({
 			apiKey: 'sk-secret',
+			s3Storage: {
+				accessKeyId: 's3-access',
+				secretAccessKey: 's3-secret',
+				sessionToken: 's3-session'
+			},
 			profiles: [
 				{
 					...DEFAULT_SETTINGS.profiles[0],
@@ -349,6 +420,8 @@ describe('serializeSettingsForExport', () => {
 		expect(safeExport.profiles[0].providerDrafts?.xai?.apiKey).toBe('');
 		expect(secretExport.profiles[0].apiKey).toBe('sk-secret');
 		expect(secretExport.profiles[0].providerDrafts?.xai?.apiKey).toBe('xai-secret');
+		expect('s3Storage' in safeExport).toBe(false);
+		expect('s3Storage' in secretExport).toBe(false);
 	});
 });
 

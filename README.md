@@ -21,7 +21,7 @@
 
 | 能力               | 说明                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------- |
-| Gallery 生图与改图 | 支持 OpenAI Images / Responses、xAI Imagine、Gemini Interactions 和自定义 manifest。        |
+| Gallery 生图与改图 | 支持 OpenAI Images / Responses、xAI Imagine、Gemini Interactions / generateContent 和自定义 manifest。 |
 | 参考图与蒙版       | 输入区可加入多张参考图，内置 mask 编辑器，适合反复迭代局部修改。                            |
 | Agent 模式         | 基于 Responses API 的多轮创作流，支持会话、工具调用预算、partial images、停止、重试和继续。 |
 | 本地历史           | 任务记录、输入图、输出图、mask、partial images 和设置都落在本机。                           |
@@ -160,12 +160,16 @@ ImagePort-Desktop/
 | OpenAI Images      | 常规 `/v1/images/generations` 与 `/v1/images/edits`。        |
 | OpenAI Responses   | Agent 模式，以及 Gallery 的 Responses 生图/改图路径。        |
 | xAI Grok Imagine   | Gallery 文生图与 JSON 图像编辑，支持最多 3 张参考图。        |
-| Google Nano Banana | Gallery 文生图与多参考图编辑，使用 Gemini Interactions API。 |
+| Google Nano Banana | Gallery 文生图与多参考图编辑，支持 Gemini Interactions 和 generateContent API。 |
 | Custom Provider    | 通过 JSON manifest 描述提交、轮询和结果解析路径。            |
 
 API Key 保存在本地 Tauri Store 中。导出设置时默认不包含 API Key。
 
-内置协议包括 OpenAI Images、OpenAI Responses、xAI Imagine Images 与 Gemini Interactions。例如，Gemini/Banana 模型既可以通过 Google 官方 Interactions 调用，也可以在中转站兼容 `/v1/images/generations` 时切换到 OpenAI Images。设置页会预览最终的 `POST` 地址，并对常见协议错配给出提示。
+内置协议包括 OpenAI Images、OpenAI Responses、xAI Imagine Images、Gemini Interactions 与 Gemini generateContent。OpenAI Images 无参考图时调用 `/v1/images/generations`，有参考图时调用 `/v1/images/edits`，无需遮罩；中转站需要同时支持所选模型的两个接口。设置页分别预览两种输入对应的请求地址。
+
+对于支持 Gemini/Banana 原生 `generateContent` 的中转，将接口协议设为 **Gemini generateContent**，API URL 填写该中转的 `https://你的中转域名/v1beta`，保留模型名称和 API Key。文生图和参考图编辑都会调用 `/v1beta/models/{model}:generateContent`，多张参考图以 `contents[].parts[].inlineData` 发送。该协议与 Gemini Interactions 的 `/interactions` 接口不同，输出格式由上游决定；当前界面提供 PNG。中转需要同时正确配置模型接口能力和计费方式，仅切换客户端协议无法修复服务端配置冲突。
+
+[Rolldek 的 Banana 2.1 文档](https://www.rolldek.com/docs/#/banana-2-1) 使用 `generationConfig.responseFormat.image` 传递图片尺寸和比例。接入时选择 **Gemini generateContent（responseFormat）**，API URL 填 `https://rolldek.com/v1beta`，模型填 `gemini-nano-banana-2.1`，API Key 使用 Rolldek 的密钥。这个选项发送 `responseModalities: ["IMAGE"]`，保留最多 14 张参考图，并使用平台默认思考等级；普通 **Gemini generateContent** 仍使用 `imageConfig`。接口路径相同不代表各平台接受相同的参数格式或计费配置。
 
 Gallery 参数会根据当前服务商和模型能力动态调整。Grok 与 Gemini 不支持像素级蒙版；Gemini 生成多张图片时会发起多次独立请求。Agent 模式目前仍使用 OpenAI Responses API。
 
@@ -180,6 +184,8 @@ ImagePort 的数据默认保存在本机：
 | 应用设置与输入草稿                           | Tauri Store       |
 
 历史数据优先级最高：应用不会在启动时自动清理历史图片，清理动作必须由用户确认。
+
+历史列表优先读取缩略图，详情、复用和下载时再读取原图；全局备份和导入会覆盖尚未分页加载的历史。当前主线围绕图片生成、编辑与管理，Studio/视频专用实现已退出，旧数据保留方式见 [升级说明](docs/image-workbench-upgrade.md)。实施范围与测试记录分别见 [收敛计划](docs/image-workbench-plan.md) 和 [验收记录](docs/image-workbench-validation.md)。
 
 ## Acknowledgements
 

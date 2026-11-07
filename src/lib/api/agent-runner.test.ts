@@ -27,7 +27,7 @@ describe('agent runner', () => {
 		const result = await runAgentResponsesRequest({
 			conversation,
 			roundId: conversation.rounds[0].id,
-			taskId: 'task-1',
+			intent: 'image-generate',
 			profile,
 			settings: DEFAULT_SETTINGS,
 			prompt: 'draw a small icon',
@@ -54,19 +54,76 @@ describe('agent runner', () => {
 			},
 			onActiveRequestId: () => undefined,
 			onText: () => undefined,
-			onPartialImages: () => undefined,
+			onImageToolStarted: () => undefined,
+			onPartialImage: () => undefined,
 			isCanceled: () => false
 		});
 
 		expect(result.responseId).toBe('resp-1');
 		expect(result.text).toBe('ok');
-		expect(result.images).toEqual(['data:image/png;base64,final']);
+		expect(result.images).toEqual([
+			{
+				toolCallId: 'image-call-1',
+				dataUrl: 'data:image/png;base64,final',
+				action: undefined,
+				revisedPrompt: undefined,
+				actualParams: undefined
+			}
+		]);
+	});
+
+	test('returns a successful text-only response without starting an image tool', async () => {
+		const startedToolCallIds: string[] = [];
+		const conversation = createAgentUserRound(
+			createAgentConversation(1, () => 'conv-text'),
+			{
+				prompt: 'help me improve this idea',
+				createId: (() => {
+					let id = 0;
+					return () => `text-id-${id++}`;
+				})()
+			}
+		);
+		const result = await runAgentResponsesRequest({
+			conversation,
+			roundId: conversation.rounds[0].id,
+			intent: 'conversation',
+			profile,
+			settings: DEFAULT_SETTINGS,
+			prompt: 'help me improve this idea',
+			params: { ...DEFAULT_PARAMS, n: 'auto' },
+			inputImages: [],
+			mask: null,
+			createRequestId: () => 'agent-text-1',
+			nativeJsonRequest: async () => ({
+				status: 200,
+				headers: {},
+				body: {
+					id: 'resp-text',
+					output: [{ type: 'message', content: [{ type: 'output_text', text: 'Try a warmer color palette.' }] }]
+				}
+			}),
+			nativeJsonStreamRequest: async () => {
+				throw new Error('stream should not be used');
+			},
+			onActiveRequestId: () => undefined,
+			onText: () => undefined,
+			onImageToolStarted: (event) => startedToolCallIds.push(event.toolCallId),
+			onPartialImage: () => undefined,
+			isCanceled: () => false
+		});
+
+		expect(result.text).toBe('Try a warmer color palette.');
+		expect(result.images).toEqual([]);
+		expect(result.toolCalls).toEqual([]);
+		expect(startedToolCallIds).toEqual([]);
 	});
 
 	test('streams text and partial images, then clears the active request id', async () => {
 		const activeIds: Array<string | null> = [];
 		const textUpdates: string[] = [];
-		const partialUpdates: string[][] = [];
+		const startedToolCallIds: string[] = [];
+		const partialUpdates: Array<{ toolCallId: string; dataUrl: string }> = [];
 		const conversation = createAgentUserRound(
 			createAgentConversation(1, () => 'conv-1'),
 			{
@@ -80,7 +137,7 @@ describe('agent runner', () => {
 		const result = await runAgentResponsesRequest({
 			conversation,
 			roundId: conversation.rounds[0].id,
-			taskId: 'task-1',
+			intent: 'image-generate',
 			profile: { ...profile, streamImages: true, streamPartialImages: 1 },
 			settings: DEFAULT_SETTINGS,
 			prompt: 'stream it',
@@ -94,23 +151,32 @@ describe('agent runner', () => {
 			nativeJsonStreamRequest: async (request, onChunk) => {
 				expect(request.requestId).toBe('agent-stream-1');
 				onChunk('data: {"type":"response.output_text.delta","delta":"hello"}\n\n');
-				onChunk('data: {"type":"response.image_generation_call.partial_image","partial_image_b64":"partial"}\n\n');
 				onChunk(
-					'data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"final"}}\n\n'
+					'data: {"type":"response.output_item.added","item":{"id":"img-call","type":"image_generation_call","action":"generate"}}\n\n'
+				);
+				onChunk(
+					'data: {"type":"response.image_generation_call.partial_image","item_id":"img-call","partial_image_b64":"partial"}\n\n'
+				);
+				onChunk(
+					'data: {"type":"response.output_item.done","item":{"id":"img-call","type":"image_generation_call","result":"final"}}\n\n'
 				);
 				return { status: 200, headers: {}, body: null };
 			},
 			onActiveRequestId: (requestId) => activeIds.push(requestId),
 			onText: (_conversationId, _roundId, text) => textUpdates.push(text),
-			onPartialImages: (_taskId, images) => partialUpdates.push(images),
+			onImageToolStarted: (event) => startedToolCallIds.push(event.toolCallId),
+			onPartialImage: (event) => partialUpdates.push({ toolCallId: event.toolCallId, dataUrl: event.dataUrl }),
 			isCanceled: () => false
 		});
 
 		expect(activeIds).toEqual(['agent-stream-1', null]);
 		expect(textUpdates).toEqual(['hello']);
-		expect(partialUpdates).toEqual([['data:image/png;base64,partial']]);
-		expect(result.images).toEqual(['data:image/png;base64,final']);
-		expect(result.partialImages).toEqual(['data:image/png;base64,partial']);
+		expect(startedToolCallIds).toEqual(['img-call']);
+		expect(partialUpdates).toEqual([{ toolCallId: 'img-call', dataUrl: 'data:image/png;base64,partial' }]);
+		expect(result.images[0]?.toolCallId).toBe('img-call');
+		expect(result.images[0]?.dataUrl).toBe('data:image/png;base64,final');
+		expect(result.partialImages[0]?.toolCallId).toBe('img-call');
+		expect(result.partialImages[0]?.dataUrl).toBe('data:image/png;base64,partial');
 	});
 
 	test('throws a stopped message when cancellation wins after streaming completes', async () => {
@@ -129,7 +195,7 @@ describe('agent runner', () => {
 			await runAgentResponsesRequest({
 				conversation,
 				roundId: conversation.rounds[0].id,
-				taskId: 'task-1',
+				intent: 'conversation',
 				profile: { ...profile, streamImages: true },
 				settings: DEFAULT_SETTINGS,
 				prompt: 'stop',
@@ -143,7 +209,8 @@ describe('agent runner', () => {
 				nativeJsonStreamRequest: async () => ({ status: 200, headers: {}, body: null }),
 				onActiveRequestId: () => undefined,
 				onText: () => undefined,
-				onPartialImages: () => undefined,
+				onImageToolStarted: () => undefined,
+				onPartialImage: () => undefined,
 				isCanceled: () => true
 			});
 		} catch (err) {
@@ -151,5 +218,50 @@ describe('agent runner', () => {
 		}
 
 		expect(message).toBe('用户停止了 Agent 轮次');
+	});
+
+	test('throws the Responses failure message from a successful SSE transport', async () => {
+		const conversation = createAgentUserRound(
+			createAgentConversation(1, () => 'conv-failed'),
+			{
+				prompt: 'stream failure',
+				createId: (() => {
+					let id = 0;
+					return () => `failed-id-${id++}`;
+				})()
+			}
+		);
+
+		let message = '';
+		try {
+			await runAgentResponsesRequest({
+				conversation,
+				roundId: conversation.rounds[0].id,
+				intent: 'conversation',
+				profile: { ...profile, streamImages: true },
+				settings: DEFAULT_SETTINGS,
+				prompt: 'stream failure',
+				params: { ...DEFAULT_PARAMS, n: 'auto' },
+				inputImages: [],
+				mask: null,
+				createRequestId: () => 'agent-stream-failed',
+				nativeJsonRequest: async () => {
+					throw new Error('json should not be used');
+				},
+				nativeJsonStreamRequest: async (_request, onChunk) => {
+					onChunk('data: {"type":"response.failed","response":{"error":{"message":"upstream failed"}}}\n\n');
+					return { status: 200, headers: {}, body: null };
+				},
+				onActiveRequestId: () => undefined,
+				onText: () => undefined,
+				onImageToolStarted: () => undefined,
+				onPartialImage: () => undefined,
+				isCanceled: () => false
+			});
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err);
+		}
+
+		expect(message).toBe('upstream failed');
 	});
 });

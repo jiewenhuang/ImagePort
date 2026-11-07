@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+	attachAgentOutputTask,
 	completeAgentRound,
 	createAgentConversation,
 	createAgentUserRound,
@@ -17,14 +18,44 @@ describe('agent conversation domain', () => {
 			{
 				prompt: 'generate a calm desktop wallpaper',
 				now: 120,
-				createId: () => `id-${ids++}`
+				createId: () => `id-${ids++}`,
+				intent: 'image-generate',
+				executionRoute: 'image-profile',
+				imageProfileId: 'image-profile'
 			}
 		);
 
 		expect(conversation.title).toBe('generate a calm desktop wallpape');
 		expect(conversation.rounds.length).toBe(1);
 		expect(conversation.rounds[0].status).toBe('running');
+		expect(conversation.rounds[0].intent).toBe('image-generate');
+		expect(conversation.rounds[0].executionRoute).toBe('image-profile');
+		expect(conversation.rounds[0].imageProfileId).toBe('image-profile');
 		expect(conversation.messages[0].role).toBe('user');
+	});
+
+	test('attaches image tasks to a running round without requiring an image on every round', () => {
+		let ids = 0;
+		const started = createAgentUserRound(
+			createAgentConversation(100, () => `id-${ids++}`),
+			{
+				prompt: 'draw',
+				now: 120,
+				createId: () => `id-${ids++}`
+			}
+		);
+		const withAssistant = startAgentAssistantMessage(started, started.rounds[0].id, {
+			now: 130,
+			createId: () => `id-${ids++}`
+		});
+		const attached = attachAgentOutputTask(withAssistant, started.rounds[0].id, 'task-1', 140);
+		const completed = completeAgentRound(attached, started.rounds[0].id, {
+			content: '完成',
+			now: 200
+		});
+
+		expect(completed.rounds[0].outputTaskIds).toEqual(['task-1']);
+		expect(completed.messages.at(-1)?.outputTaskIds).toEqual(['task-1']);
 	});
 
 	test('completes a round with assistant output task ids', () => {
@@ -123,6 +154,10 @@ describe('agent conversation domain', () => {
 						responseId: 'resp-1',
 						toolCalls: [{ id: 'tool', type: 'web_search_call', status: 'completed', title: 'query' }],
 						webSearchEnabled: true,
+						intent: 'image-edit',
+						executionRoute: 'native-image-tool',
+						imageProfileId: 'fallback-image',
+						protocolWarning: 'ignored fake tool output',
 						createdAt: 1
 					}
 				],
@@ -137,5 +172,9 @@ describe('agent conversation domain', () => {
 		expect(conversations[0].rounds[0].status).toBe('canceled');
 		expect(conversations[0].rounds[0].responseId).toBe('resp-1');
 		expect(conversations[0].rounds[0].toolCalls[0].type).toBe('web_search_call');
+		expect(conversations[0].rounds[0].intent).toBe('image-edit');
+		expect(conversations[0].rounds[0].executionRoute).toBe('native-image-tool');
+		expect(conversations[0].rounds[0].imageProfileId).toBe('fallback-image');
+		expect(conversations[0].rounds[0].protocolWarning).toBe('ignored fake tool output');
 	});
 });

@@ -1,3 +1,4 @@
+import { assertTaskMediaLoaded, isStoredTaskMedia } from './task-media';
 import {
 	DEFAULT_PARAMS,
 	normalizeOutputImageCount,
@@ -35,6 +36,7 @@ export function normalizeTasks(value: unknown): TaskRecord[] {
 }
 
 export function buildExportedTasks(tasks: TaskRecord[]): ExportedTasks {
+	tasks.forEach(assertTaskMediaLoaded);
 	return {
 		version: 1,
 		tasks: normalizeTasks(tasks),
@@ -44,8 +46,9 @@ export function buildExportedTasks(tasks: TaskRecord[]): ExportedTasks {
 
 export function parseImportedTasks(text: string): TaskRecord[] {
 	const parsed = JSON.parse(text) as unknown;
-	if (isRecord(parsed) && Array.isArray(parsed.tasks)) return normalizeTasks(parsed.tasks);
-	return normalizeTasks(parsed);
+	const tasks = normalizeTasks(isRecord(parsed) && Array.isArray(parsed.tasks) ? parsed.tasks : parsed);
+	tasks.forEach(assertTaskMediaLoaded);
+	return tasks;
 }
 
 export function resolveStoredTasks(primaryTasks: TaskRecord[] | null, fallbackValue: unknown): TaskRecord[] {
@@ -57,7 +60,8 @@ export function resolveStoredTasks(primaryTasks: TaskRecord[] | null, fallbackVa
 
 export function mergeTaskSnapshots(preferredTasks: TaskRecord[], fallbackTasks: TaskRecord[]): TaskRecord[] {
 	const merged = new Map<string, TaskRecord>();
-	for (const task of normalizeTasks(preferredTasks)) merged.set(task.id, task);
+	// Current-session tasks may still be running while another history page loads.
+	for (const task of preferredTasks) merged.set(task.id, task);
 	for (const task of normalizeTasks(fallbackTasks)) {
 		if (!merged.has(task.id)) merged.set(task.id, task);
 	}
@@ -201,6 +205,7 @@ function normalizeTask(value: unknown): TaskRecord | null {
 		mask: normalizeMask(value.mask),
 		images: normalizeStringArray(value.images),
 		thumbnailImages: normalizeStringArray(value.thumbnailImages),
+		...(isStoredTaskMedia(value.storedMedia) ? { storedMedia: value.storedMedia } : {}),
 		status: wasRunning ? 'error' : status,
 		error: wasRunning ? '任务在应用关闭或刷新时中断' : getNullableString(value.error),
 		createdAt,
